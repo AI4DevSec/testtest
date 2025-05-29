@@ -3,8 +3,15 @@ import random
 import time
 import requests
 import google.generativeai as genai
+from google.api_core import exceptions # ADDED THIS IMPORT for proper exception handling
 from dotenv import load_dotenv
-import json
+import json # Make sure json is imported
+
+# New imports for Google Blogger API
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
 import re
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
@@ -13,8 +20,6 @@ import logging
 from datetime import datetime
 import unicodedata
 import platform
-import shutil # Import shutil for folder operations
-from google.api_core import exceptions
 
 # Setup logging
 logging.basicConfig(
@@ -29,9 +34,8 @@ logger = logging.getLogger(__name__)
 
 # IMPORTANT: How to run this script:
 # 1. Ensure you have a .env file with GNEWS_API_KEY and GEMINI_API_KEY.
-# 2. Install required libraries: pip install python-dotenv requests Pillow google-generativeai
-# 3. This script is now designed to be run by an external scheduler (cron/Task Scheduler)
-#    It will perform one cycle of blog generation and then exit.
+# 2. Install required libraries: pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib
+# 3. Run from terminal: python your_script_name.py
 
 # Load environment variables
 load_dotenv()
@@ -41,11 +45,17 @@ GNEWS_API_KEY = os.getenv('GNEWS_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 CATEGORIES = ["technology", "health", "sports", "business", "entertainment"]
 # This defines how many *source articles* we will attempt to aggregate into *one* new blog post.
-NUM_SOURCE_ARTICLES_TO_AGGREGATE = 5 
+NUM_SOURCE_ARTICLES_TO_AGGREGATE = 5
 LANGUAGE = 'en'
 BRANDING_LOGO_PATH = os.getenv('BRANDING_LOGO_PATH', None)
 IMAGE_OUTPUT_FOLDER = "transformed_images"
 BLOG_OUTPUT_FOLDER = "blog_drafts"
+
+# Blogger Specific Configuration
+BLOGGER_BLOG_ID = os.getenv('BLOGGER_BLOG_ID', '8169847264446388236') # Your blog ID
+# The service account credentials JSON string will come from GitHub Secrets
+GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON = os.getenv('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS')
+
 
 # LLM Retry Configuration
 LLM_MAX_RETRIES = 5
@@ -76,49 +86,34 @@ FONT_PATHS = {
 def find_system_font():
     """Find the best available font for the current system"""
     system = platform.system().lower()
-    
+
     if 'darwin' in system:
         font_list = FONT_PATHS['mac']
     elif 'windows' in system:
         font_list = FONT_PATHS['windows']
     else: # Assume Linux/Unix-like
         font_list = FONT_PATHS['linux']
-    
+
     for font_path in font_list:
         if os.path.exists(font_path):
             logger.info(f"Using font: {font_path}")
             return font_path
-    
+
     logger.warning("No suitable system fonts found, using PIL default. Text quality on images may be low.")
     return None
 
 DEFAULT_FONT_PATH = find_system_font()
 
-def clear_output_folders():
-    """Clears all content from the IMAGE_OUTPUT_FOLDER and BLOG_OUTPUT_FOLDER."""
-    logger.info("Clearing output folders...")
-    for folder_path in [IMAGE_OUTPUT_FOLDER, BLOG_OUTPUT_FOLDER]:
-        if os.path.exists(folder_path):
-            try:
-                shutil.rmtree(folder_path)
-                logger.info(f"Successfully cleared: {folder_path}")
-            except OSError as e:
-                logger.error(f"Error clearing folder {folder_path}: {e}")
-        else:
-            logger.info(f"Folder {folder_path} does not exist. No need to clear.")
-
-def create_initial_directories():
-    """Ensures base and category-specific output directories exist."""
-    for folder in [IMAGE_OUTPUT_FOLDER, BLOG_OUTPUT_FOLDER]:
-        os.makedirs(folder, exist_ok=True)
-        for cat in CATEGORIES:
-            os.makedirs(os.path.join(folder, cat), exist_ok=True)
-    logger.info("Output directories ensured.")
+# Create necessary directories
+for folder in [IMAGE_OUTPUT_FOLDER, BLOG_OUTPUT_FOLDER]:
+    os.makedirs(folder, exist_ok=True)
+    for cat in CATEGORIES:
+        os.makedirs(os.path.join(folder, cat), exist_ok=True)
 
 # Setup Gemini API
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    RESEARCH_MODEL = genai.GenerativeModel('models/gemini-2.5-flash-preview-05-20') 
+    RESEARCH_MODEL = genai.GenerativeModel('models/gemini-2.5-flash-preview-05-20')
     CONTENT_MODEL = genai.GenerativeModel('models/gemini-2.5-flash-preview-05-20')
 else:
     logger.error("GEMINI_API_KEY not set. Gemini functions will not work.")
@@ -126,25 +121,40 @@ else:
 def validate_environment():
     """Validate that all required environment variables and dependencies are set"""
     errors = []
-    
+
     if not GNEWS_API_KEY:
         errors.append("GNEWS_API_KEY not found in environment variables.")
-    
+
     if not GEMINI_API_KEY:
         errors.append("GEMINI_API_KEY not found in environment variables. Gemini functions will be skipped.")
-    
+
+    # Validate Blogger API credentials
+    if not BLOGGER_BLOG_ID:
+        errors.append("BLOGGER_BLOG_ID not set. Cannot post to Blogger.")
+    if not GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON:
+        errors.append("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS not found in environment variables. Cannot post to Blogger.")
+    else:
+        try:
+            json.loads(GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON)
+        except json.JSONDecodeError:
+            errors.append("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS is not a valid JSON string.")
+
+
     try:
         import PIL
         import google.generativeai
+        from google.api_core import exceptions # Check if api_core.exceptions is importable
         import requests
+        import googleapiclient.discovery
+        import google.oauth2.service_account
     except ImportError as e:
-        errors.append(f"Missing required package: {e}. Please run 'pip install python-dotenv requests Pillow google-generativeai'.")
-    
+        errors.append(f"Missing required package: {e}. Please run 'pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib'.")
+
     if errors:
         for error in errors:
             logger.error(error)
         return False
-    
+
     logger.info("Environment validation passed.")
     return True
 
@@ -166,27 +176,27 @@ def fetch_gnews_articles(category, max_articles_to_fetch=10, max_retries=3):
         'token': GNEWS_API_KEY,
         'max': max_articles_to_fetch # Request up to this many articles
     }
-    
+
     for attempt in range(max_retries):
         try:
             logger.info(f"Fetching up to {max_articles_to_fetch} articles for {category} (attempt {attempt + 1})...")
             resp = requests.get(url, params=params, timeout=15)
             resp.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            
+
             data = resp.json()
             articles = data.get('articles', [])
-            
+
             if not articles:
                 logger.warning(f"No articles found for category {category} from GNews API.")
                 return []
-            
+
             # Select unique articles based on URL to avoid duplicates if API sends similar ones
             unique_articles = {article['url']: article for article in articles}.values()
-            
+
             selected_articles = list(unique_articles)[:max_articles_to_fetch] # Cap at requested max
             logger.info(f"Successfully fetched {len(selected_articles)} articles for {category}.")
             return selected_articles
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Error fetching articles for {category} (attempt {attempt + 1}): {e}")
             if attempt < max_retries - 1:
@@ -233,21 +243,21 @@ def aggregate_articles(articles_list, category):
 
         if title: titles.append(title)
         if description: consolidated_descriptions.append(description)
-        
+
         # Only add content if it's substantial and not a placeholder "[Removed]"
         if content and content.strip() != '[Removed]' and len(content.strip()) > 50:
             # Append content with a clear source identifier for the AI
             consolidated_content.append(f"### Source: {title}\n\n{content}")
-            
+
             # If we haven't found an image yet, and this article has one and decent content length, take it.
-            if not image_found and article_image and len(content) > 100: 
+            if not image_found and article_image and len(content) > 100:
                 image_url = article_image
                 primary_source_url_for_disclaimer = source_url
                 image_found = True
-        
+
         if source_domain:
             competitor_domains.add(source_domain)
-        
+
     # Fallback for image: if no image found from content-rich articles, take the first one available in the original list
     if not image_url:
         for article in articles_list: # Loop through original order for simpler first-available
@@ -288,31 +298,97 @@ def enhance_image_quality(img):
     # Convert to RGB if not already, to ensure consistent processing for JPEG saving
     if img.mode != 'RGB':
         img = img.convert('RGB')
-    
+
     # Apply subtle enhancements
     enhancer = ImageEnhance.Sharpness(img)
     img = enhancer.enhance(1.2) # Sharpen slightly
-    
+
     enhancer = ImageEnhance.Contrast(img)
     img = enhancer.enhance(1.1) # Increase contrast slightly
-    
+
     enhancer = ImageEnhance.Color(img)
     img = enhancer.enhance(1.05) # Boost color saturation a bit
-    
+
     # Apply a subtle unsharp mask effect for perceived sharpness
     img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=150, threshold=3))
-    
+
     return img
 
 def create_text_with_shadow(draw, position, text, font, text_color, shadow_color, shadow_offset):
     """Draw text with shadow for better visibility."""
     x, y = position
     shadow_x, shadow_y = shadow_offset
-    
+
     # Draw shadow
     draw.text((x + shadow_x, y + shadow_y), text, font=font, fill=shadow_color)
     # Draw main text
     draw.text((x, y), text, font=font, fill=text_color)
+
+def find_content_bbox_and_trim(img, tolerance=20, border_colors_to_trim=((0,0,0), (255,255,255))):
+    """
+    Attempts to find the bounding box of non-border content pixels and trims the image.
+    Considers black and white as potential uniform border colors.
+    Increased tolerance for slight variations in border color.
+    """
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+
+    width, height = img.size
+    pixels = img.load() # Get pixel access for speed
+
+    def is_similar(pixel1, pixel2, tol):
+        """Checks if two pixels are similar within a given tolerance."""
+        return all(abs(c1 - c2) <= tol for c1, c2 in zip(pixel1, pixel2))
+
+    def is_border_pixel_group(pixel):
+        """Checks if a pixel is similar to any of the specified border colors."""
+        return any(is_similar(pixel, bc, tolerance) for bc in border_colors_to_trim)
+
+    # Find top
+    top = 0
+    for y in range(height):
+        if not all(is_border_pixel_group(pixels[x, y]) for x in range(width)):
+            top = y
+            break
+
+    # Find bottom
+    bottom = height
+    for y in range(height - 1, top, -1):
+        if not all(is_border_pixel_group(pixels[x, y]) for x in range(width)):
+            bottom = y + 1
+            break
+
+    # Find left
+    left = 0
+    for x in range(width):
+        if not all(is_border_pixel_group(pixels[x, y]) for y in range(height)):
+            left = x
+            break
+
+    # Find right
+    right = width
+    for x in range(width - 1, left, -1):
+        if not all(is_border_pixel_group(pixels[x, y]) for y in range(height)):
+            right = x + 1
+            break
+
+    if (left, top, right, bottom) != (0, 0, width, height):
+        # Ensure that after trimming, a reasonable amount of content remains
+        # and that trimming isn't just cropping out actual image content mistakenly
+        # This prevents aggressive trimming of images that naturally have large single-color areas
+        min_content_ratio = 0.75 # Ensure at least 75% of original width/height remains after trim
+        trimmed_width = right - left
+        trimmed_height = bottom - top
+        if trimmed_width > (width * min_content_ratio) and \
+           trimmed_height > (height * min_content_ratio):
+            logger.info(f"Automatically trimmed detected uniform borders from original image. BBox: ({left}, {top}, {right}, {bottom})")
+            return img.crop((left, top, right, bottom))
+        else:
+            logger.debug(f"Trimming borders would remove too much content ({trimmed_width}/{width} or {trimmed_height}/{height}). Skipping trim.")
+
+    logger.debug("No significant uniform color borders detected in original image for trimming.")
+    return img
+
 
 def transform_image(image_url, title_text, category_text, output_category_folder, safe_filename):
     """
@@ -329,17 +405,17 @@ def transform_image(image_url, title_text, category_text, output_category_folder
 
     try:
         logger.info(f"Processing image from URL: {image_url[:70]}...")
-        
+
         # Download image with proper headers to avoid 403 Forbidden errors
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         response = requests.get(image_url, timeout=20, stream=True, headers=headers)
         response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-        
+
         # Load image, handling potential errors and different modes
         img = Image.open(BytesIO(response.content))
-        
+
         # Convert to RGB for consistent processing and JPEG saving. If there's an alpha channel,
         # create a white background, otherwise just convert.
         if img.mode in ('RGBA', 'LA', 'P'):
@@ -353,99 +429,132 @@ def transform_image(image_url, title_text, category_text, output_category_folder
         elif img.mode != 'RGB':
             img = img.convert('RGB')
 
-        # Target dimensions for blog featured images (16:9 aspect ratio)
-        target_width = 1200
-        target_height = 675
+        # --- STEP 1: Automatically trim uniform borders (letterboxing/pillarboxing) from the source image ---
+        # This will return the original image if no significant borders are found.
+        img = find_content_bbox_and_trim(img)
 
+        # Target dimensions for the *visual content* of the blog featured image (16:9 aspect ratio)
+        target_content_width = 1200
+        target_content_height = 675
+        target_aspect = target_content_width / target_content_height
+
+        # --- STEP 2: Resize and Crop to fill 16:9 (Object-Fit: Cover equivalent) ---
+        # This ensures the core visual area is always 1200x675
         original_width, original_height = img.size
         original_aspect = original_width / original_height
-        target_aspect = target_width / target_height
 
-        # Calculate new dimensions for resizing while maintaining aspect ratio
-        if original_aspect > target_aspect: # Original is wider than target
-            new_height = target_height
-            new_width = int(new_height * original_aspect)
-        else: # Original is taller or same aspect as target
-            new_width = target_width
-            new_height = int(new_width / original_aspect)
+        if original_aspect > target_aspect: # Original image is wider than target aspect ratio
+            # Scale height to match target_content_height, then crop width
+            resize_height = target_content_height
+            resize_width = int(target_content_height * original_aspect)
+        else: # Original image is taller than target aspect ratio
+            # Scale width to match target_content_width, then crop height
+            resize_width = target_content_width
+            resize_height = int(target_content_width / original_aspect)
 
-        # Resize with high-quality resampling (LANCZOS is best for downscaling)
-        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        # Resize the image so that it completely covers the target content dimensions
+        img = img.resize((resize_width, resize_height), Image.Resampling.LANCZOS)
 
-        # Center crop to target dimensions
-        left = (new_width - target_width) // 2
-        top = (new_height - target_height) // 2
-        img = img.crop((left, top, left + target_width, top + target_height))
+        # Center crop to the exact target content dimensions (removes excess equally from sides)
+        left_crop = (resize_width - target_content_width) // 2
+        top_crop = (resize_height - target_content_height) // 2
+        img = img.crop((left_crop, top_crop, left_crop + target_content_width, top_crop + target_content_height))
 
-        # Apply image enhancements for better visual quality
+        # --- STEP 3: Apply image enhancements to the 16:9 content ---
         img = enhance_image_quality(img)
 
-        # Convert to RGBA for drawing translucent elements (overlay, logo, shadow text)
+        # Convert to RGBA for drawing elements
         img = img.convert('RGBA')
+
+        # --- STEP 4: Create a clean, dynamically-extended bottom area for text with gradient ---
+        # This creates the "title card" effect.
+
+        # Define the height of the new extended area for text (e.g., 25% of the 16:9 content height)
+        extended_area_height = int(target_content_height * 0.25)
+
+        # Calculate the total height of the final image canvas
+        final_canvas_height = target_content_height + extended_area_height
+        final_canvas_width = target_content_width # Same width as target_content_width
+
+        # Create the new larger canvas for the final image. Initialize with the cropped image.
+        # This canvas will hold the 16:9 image on top and the extended part below.
+        new_combined_img = Image.new('RGBA', (final_canvas_width, final_canvas_height), (0, 0, 0, 255)) # Start with opaque black background
+        new_combined_img.paste(img, (0, 0)) # Paste the 16:9 content image at the top
+
+        # Dynamically extend the bottom few rows of the 16:9 image downwards
+        # This creates a seamless visual continuation from the main image content into the extended area.
+        strip_from_original_height = int(target_content_height * 0.05) # Sample a 5% strip from the bottom of the 16:9 content
+        if strip_from_original_height > 0:
+            bottom_strip_for_extension = img.crop((0, target_content_height - strip_from_original_height, target_content_width, target_content_height))
+            stretched_strip = bottom_strip_for_extension.resize((target_content_width, extended_area_height), Image.Resampling.BICUBIC)
+            new_combined_img.paste(stretched_strip, (0, target_content_height)) # Paste this stretched strip into the extended area
+            logger.info("Extended bottom of image with stretched content for seamless look.")
+
+        # Create a new, transparent image specifically for the gradient overlay.
+        # This image must be the full size of `new_combined_img` so it can be alpha_composited correctly.
+        gradient_overlay_image = Image.new('RGBA', new_combined_img.size, (0, 0, 0, 0))
+        draw_gradient = ImageDraw.Draw(gradient_overlay_image)
+
+        # Draw the gradient lines only within the extended area on this new gradient image.
+        # The gradient fades from mostly transparent to mostly opaque black.
+        gradient_top_y_on_canvas = target_content_height # Absolute Y where gradient starts on the final canvas
+        for y_relative_to_extended_area in range(extended_area_height):
+            # Alpha increases from 0 (transparent) at the top of the extended area
+            # to 95% opaque black at the bottom of the extended area.
+            alpha = int(255 * (y_relative_to_extended_area / extended_area_height) * 0.95)
+            absolute_y_on_canvas = gradient_top_y_on_canvas + y_relative_to_extended_area
+            draw_gradient.line([(0, absolute_y_on_canvas), (final_canvas_width, absolute_y_on_canvas)], fill=(0, 0, 0, alpha))
+
+        # Composite the gradient overlay image onto the `new_combined_img`.
+        # This is the correct way to blend an RGBA image (gradient) over another RGBA image (new_combined_img).
+        img = Image.alpha_composite(new_combined_img, gradient_overlay_image)
+
+        # Re-initialize draw object for the `img` (which is now the final canvas with content and gradient)
         draw = ImageDraw.Draw(img)
 
-        # --- Draw a semi-transparent overlay to cover original text/logos ---
-        # This will cover the bottom portion where original titles/logos might be.
-        overlay_color = (0, 0, 0, 150) # Semi-transparent black (RGBA)
-        overlay_height_ratio = 0.30 # Cover the bottom 30% of the image
-        overlay_height = int(target_height * overlay_height_ratio)
-        overlay_y_start = target_height - overlay_height
-        overlay_rect_coords = (0, overlay_y_start, target_width, target_height)
 
-        # Create a new blank overlay image with transparency
-        overlay_img = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        overlay_draw = ImageDraw.Draw(overlay_img)
-        overlay_draw.rectangle(overlay_rect_coords, fill=overlay_color)
-
-        # Alpha composite the overlay onto the main image
-        img = Image.alpha_composite(img, overlay_img)
-        
-        # Re-initialize draw object after alpha_composite because img object has changed
-        draw = ImageDraw.Draw(img)
-        # --- END NEW ---
-
-        # Font setup with fallback mechanism
-        title_font_size = max(int(target_height * 0.035), 20) # Ensure a minimum readable size
-        
-        selected_font = None
-        if DEFAULT_FONT_PATH:
-            try:
-                selected_font = ImageFont.truetype(DEFAULT_FONT_PATH, title_font_size)
-            except (IOError, OSError) as e:
-                logger.warning(f"Could not load specified font '{DEFAULT_FONT_PATH}': {e}. Falling back to default PIL font.")
-                selected_font = ImageFont.load_default()
-        else:
-            selected_font = ImageFont.load_default()
-            logger.warning("No default font path found. Using PIL default font. Text quality on images may be basic.")
-
-
-        # Add Custom Branding (Logo) - Positioned in TOP-RIGHT
+        # --- STEP 5: Add Custom Branding (Logo) - Positioned in TOP-RIGHT ---
         if BRANDING_LOGO_PATH and os.path.exists(BRANDING_LOGO_PATH):
             try:
                 logo = Image.open(BRANDING_LOGO_PATH).convert("RGBA")
-                logo_height = int(target_height * 0.08) # Logo height is 8% of image height
+                logo_height = int(target_content_height * 0.08) # Logo height is 8% of image height
                 logo_width = int(logo.width * (logo_height / logo.height)) # Maintain logo aspect ratio
                 logo = logo.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
 
-                # Position logo in top right with padding
-                padding = int(target_width * 0.02) # 2% padding from edges
-                logo_x = target_width - logo_width - padding
-                logo_y = padding 
-                
-                # Create a transparent overlay for the logo and alpha-composite it
-                # Note: This creates another temporary overlay_img, which is fine as it's composited immediately
+                # Position logo in top right with padding relative to the original 16:9 content area
+                padding = int(target_content_width * 0.02) # 2% padding from edges
+                logo_x = target_content_width - logo_width - padding
+                logo_y = padding
+
+                # Create a temporary transparent overlay for the logo and alpha-composite it.
+                # This ensures the logo's transparency is handled correctly over the image.
                 logo_overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-                logo_overlay.paste(logo, (logo_x, logo_y), logo) # Use logo as mask for transparency
+                logo_overlay.paste(logo, (logo_x, logo_y), logo) # Use logo itself as mask for transparency
                 img = Image.alpha_composite(img, logo_overlay)
-                # Re-initialize draw object after alpha_composite
-                draw = ImageDraw.Draw(img)
                 logger.info("Branding logo applied successfully.")
             except Exception as e:
                 logger.error(f"Error applying branding logo: {e}")
 
-        # Add Title Text (bottom right corner, right-aligned, background already handled by the overlay)
-        max_text_width_for_title = int(target_width * 0.45) # Title text can take up to 45% of image width
-        horizontal_padding_text = int(target_width * 0.02) # 2% padding from edges for text
+        # --- STEP 6: Add Title Text (bottom right corner, on extended area) ---
+        # Font setup: Ensure selected_font is defined before use
+        selected_font = ImageFont.load_default() # Initialize with a default font
+        title_font_size = max(int(target_content_height * 0.035), 20) # Ensure a minimum readable size
+
+        # Attempt to load custom font, fallback to default if error
+        if DEFAULT_FONT_PATH:
+            try:
+                selected_font = ImageFont.truetype(DEFAULT_FONT_PATH, title_font_size)
+            except (IOError, OSError) as e:
+                logger.warning(f"Could not load specified font '{DEFAULT_FONT_PATH}': {e}. Falling back to PIL default.")
+                # `selected_font` remains `ImageFont.load_default()` if custom fails
+        else:
+            logger.warning("No default font path specified. Using PIL default font. Text quality on images may be basic.")
+
+        # Re-initialize draw object for the final `img` after all compositing steps for text drawing
+        draw = ImageDraw.Draw(img)
+
+        max_text_width_for_title = int(target_content_width * 0.45) # Title text can take up to 45% of image width
+        horizontal_padding_text = int(target_content_width * 0.02) # 2% padding from edges for text
 
         def get_wrapped_text_lines(text, font, max_width):
             """Wraps text to fit within a given maximum width."""
@@ -483,12 +592,19 @@ def transform_image(image_url, title_text, category_text, output_category_folder
                 line_height_list.append(line_height + int(title_font_size * 0.2)) # Add small line spacing
             except AttributeError:
                 line_height_list.append(title_font_size + 3) # Fallback for default font
-        
+
         total_text_height_for_placement = sum(line_height_list)
 
-        # Determine starting Y position for the text block (bottom-aligned relative to overlay)
-        bottom_align_y_coord = target_height - horizontal_padding_text
+        # Determine starting Y position for the text block (bottom-aligned relative to FINAL canvas height)
+        bottom_align_y_coord = final_canvas_height - horizontal_padding_text
         current_y_text_draw = bottom_align_y_coord - total_text_height_for_placement
+
+        # Ensure text is safely within the newly created extended area's boundaries
+        # It should start below where the original 16:9 image *ends* on the canvas
+        min_y_for_text = target_content_height + horizontal_padding_text
+        if current_y_text_draw < min_y_for_text:
+            current_y_text_draw = min_y_text
+
 
         # Draw each line of the title with shadow
         for i, line in enumerate(wrapped_title_lines):
@@ -498,8 +614,8 @@ def transform_image(image_url, title_text, category_text, output_category_folder
             except AttributeError:
                 line_width = selected_font.getsize(line)[0]
 
-            x_text_draw = target_width - horizontal_padding_text - line_width # Right-align each line
-            
+            x_text_draw = target_content_width - horizontal_padding_text - line_width # Right-align each line
+
             create_text_with_shadow(
                 draw, (x_text_draw, current_y_text_draw), line, selected_font,
                 (255, 255, 255, 255), (0, 0, 0, 180), (2, 2) # White text, subtle black shadow
@@ -507,17 +623,18 @@ def transform_image(image_url, title_text, category_text, output_category_folder
             current_y_text_draw += line_height_list[i] # Move Y down for the next line
 
         # Save the transformed image to disk as JPEG for web optimization
+        # The output image will have the new `final_canvas_height` (e.g., 1200x843.75)
         output_filename = f"{safe_filename}_{int(time.time())}.jpg"
         output_full_path = os.path.join(IMAGE_OUTPUT_FOLDER, output_category_folder, output_filename)
 
         # Convert to RGB before saving as JPEG (removes alpha channel)
         final_img_for_save = img.convert('RGB')
-        
+
         # Save to a BytesIO object first to get raw bytes for Base64 encoding
         buffer = BytesIO()
         final_img_for_save.save(buffer, format='JPEG', quality=85, optimize=True) # Optimize for web
         image_bytes = buffer.getvalue()
-        
+
         # Generate Base64 data URI
         base64_encoded_image = base64.b64encode(image_bytes).decode('utf-8')
         base64_data_uri = f"data:image/jpeg;base64,{base64_encoded_image}"
@@ -554,9 +671,10 @@ def _gemini_generate_content_with_retry(model, prompt, max_retries=LLM_MAX_RETRI
 
             return response
         except (
-            google.api_core.exceptions.InternalServerError,
-            google.api_core.exceptions.ResourceExhausted, # Rate limit
-            requests.exceptions.RequestException, # Network errors (e.g., connection reset by peer)
+            exceptions.InternalServerError, # Use 'exceptions' imported from google.api_core
+            exceptions.ResourceExhausted,   # Use 'exceptions' imported from google.api_core
+            exceptions.DeadlineExceeded,    # Handle 504 Deadline Exceeded explicitly
+            requests.exceptions.RequestException, # General network errors (e.g., connection reset by peer)
             ValueError # Custom empty response error
         ) as e:
             logger.warning(f"Attempt {attempt + 1} failed with error: {e}")
@@ -605,7 +723,7 @@ def perform_research_agent(target_topic, competitors):
         logger.info(f"Generating research for: '{target_topic[:70]}...'")
         # Use the helper function here
         response = _gemini_generate_content_with_retry(RESEARCH_MODEL, prompt)
-        
+
         # Extract the JSON block from the response text
         json_match = re.search(r'```json\s*(.*?)\s*```', response.text, re.DOTALL)
         if json_match:
@@ -623,9 +741,9 @@ def perform_research_agent(target_topic, competitors):
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse research response as JSON for '{target_topic}'. Raw response:\n{response.text[:500]}...")
                 return None
-            
-    except (json.JSONDecodeError, ValueError) as e: # Catch ValueError from helper
-        logger.error(f"JSON parsing or content validation failed for research output for '{target_topic}': {e}.")
+
+    except (json.JSONDecodeError, ValueError, requests.exceptions.RequestException, exceptions.InternalServerError, exceptions.ResourceExhausted, exceptions.DeadlineExceeded) as e:
+        logger.error(f"Research Agent generation failed or JSON parsing/content validation failed for '{target_topic}': {e}.")
         return None
     except Exception as e:
         logger.error(f"Research Agent generation failed for '{target_topic}': {e}", exc_info=True)
@@ -663,6 +781,13 @@ def generate_content_agent(consolidated_article_data, research_output, transform
     consolidated_article_data_for_prompt = consolidated_article_data.copy()
     consolidated_article_data_for_prompt['combined_content'] = combined_content_for_prompt
 
+    # Safely prepare description for embedding in the prompt
+    raw_description_for_prompt = consolidated_article_data.get(
+        'combined_description',
+        'A comprehensive and insightful look at the latest news and trends.'
+    )
+    blog_description_for_prompt = raw_description_for_prompt.replace('"', '').replace('\n', ' ').replace('\r', ' ').strip()[:155]
+
 
     prompt = (
         f"You are a specialized Blog Writing Agent that transforms SEO research and aggregated article data "
@@ -687,7 +812,7 @@ def generate_content_agent(consolidated_article_data, research_output, transform
         f"Generate the complete blog post in markdown format. It must start with a metadata block followed by the blog content.\n\n"
         f"**Metadata Block (exact key-value pairs, no --- delimiters, newline separated):**\n"
         f"title: {new_blog_title}\n" # Use the new, AI-generated title
-        f"description: {consolidated_article_data.get('combined_description', 'A comprehensive and insightful look at the latest news and trends.').replace('"', '')[:155]}\n"
+        f"description: {blog_description_for_prompt}\n" # Use the pre-processed variable here
         f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
         f"categories: [{consolidated_article_data.get('category', 'general')}, {', '.join(research_output.get('primary_keywords', [])[:2])}]\n"
         f"tags: [{', '.join(research_output.get('primary_keywords', []) + research_output.get('secondary_keywords', {}).get(list(research_output.get('secondary_keywords', {}).keys())[0], []) if research_output.get('secondary_keywords') else research_output.get('primary_keywords', []))}]\n"
@@ -701,20 +826,20 @@ def generate_content_agent(consolidated_article_data, research_output, transform
         f"Do NOT include any introductory or concluding remarks outside the blog content itself (e.g., 'Here is your blog post'). **Do NOT include any bracketed instructions (like `[mention this]`), placeholders (like `example.com`), or any comments intended for me within the output markdown. The entire output must be polished, final content, ready for publication.**"
     )
     try:
-        logger.info(f"Generating full blog content for: '%s...' (Truncated input size: %d)" % (new_blog_title[:70], len(combined_content_for_prompt)))
+        logger.info(f"Generating full blog content for: '{new_blog_title[:70]}...'")
         # Use the helper function here
         response = _gemini_generate_content_with_retry(CONTENT_MODEL, prompt)
-        
+
         content = response.text.strip()
-        
+
         # Clean up any remaining AI artifacts before returning
         content = clean_ai_artifacts(content)
-        
+
         logger.info("Content generation successful.")
         return content
-        
-    except (ValueError) as e: # Catch ValueError from helper
-        logger.error(f"Content Agent content validation failed for '{new_blog_title}': {e}.")
+
+    except (ValueError, requests.exceptions.RequestException, exceptions.InternalServerError, exceptions.ResourceExhausted, exceptions.DeadlineExceeded) as e:
+        logger.error(f"Content Agent generation failed or content validation failed for '{new_blog_title}': {e}.")
         return None
     except Exception as e:
         logger.error(f"Content Agent generation failed for '{new_blog_title}': {e}", exc_info=True)
@@ -724,10 +849,10 @@ def clean_ai_artifacts(content):
     """Enhanced cleaning of AI-generated artifacts and placeholders."""
     # Remove any bracketed instructions/placeholders like [Some Text Here] or [Insert Link Here]
     content = re.sub(r'\[.*?\]', '', content)
-    
+
     # Remove any stray @ symbols followed by words (e.g., @https, @email), likely from malformed links
     content = re.sub(r'\s*@\S+', '', content)
-    
+
     # Remove example.com or similar placeholder URLs, both in markdown and raw URLs
     placeholder_domains = [
         'example.com', 'example.org', 'placeholder.com', 'yoursite.com',
@@ -738,7 +863,7 @@ def clean_ai_artifacts(content):
         content = re.sub(rf'\[[^\]]*\]\(https?://(?:www\.)?{re.escape(domain)}[^\)]*\)', '', content, flags=re.IGNORECASE)
         # Raw URLs like https://www.example.com/path
         content = re.sub(rf'https?://(?:www\.)?{re.escape(domain)}\S*', '', content, flags=re.IGNORECASE)
-    
+
     # Remove any remaining AI comments or instructions that might slip through
     ai_patterns = [
         r'(?i)note:.*?(?=\n|$)',
@@ -754,10 +879,10 @@ def clean_ai_artifacts(content):
 
     # Clean up multiple consecutive blank lines to just two (for paragraph separation)
     content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
-    
+
     # Remove leading/trailing whitespace from each line
     content = '\n'.join([line.strip() for line in content.split('\n')])
-    
+
     # Ensure consistent line endings
     content = content.replace('\r\n', '\n').replace('\r', '\n')
 
@@ -814,7 +939,7 @@ def markdown_to_html(markdown_text, main_featured_image_filepath=None, main_feat
     Includes cleanup for malformed example links and AI instructions.
     """
     html_text = markdown_text
-    
+
     # Apply aggressive cleanup before markdown conversion
     html_text = clean_ai_artifacts(html_text)
 
@@ -832,7 +957,7 @@ def markdown_to_html(markdown_text, main_featured_image_filepath=None, main_feat
 
     # Lists (unordered and ordered) - process list items first, then wrap in ul/ol
     html_text = re.sub(r'^\s*([-*]|\d+\.)\s+(.*)$', r'<li>\2</li>', html_text, flags=re.MULTILINE)
-    
+
     # Wrap consecutive <li> items into <ul> or <ol>
     # This is a basic approach and might not handle nested lists or complex markdown lists perfectly.
     # It assumes all lists are at the top level or are correctly separated by non-list content.
@@ -842,7 +967,7 @@ def markdown_to_html(markdown_text, main_featured_image_filepath=None, main_feat
             return f'<ol>{list_items_html}</ol>'
         else: # Assume unordered
             return f'<ul>{list_items_html}</ul>'
-            
+
     # Apply this regex to sections of only <li> tags
     html_text = re.sub(r'(<li>.*?</li>\s*)+', wrap_lists, html_text, flags=re.DOTALL)
 
@@ -851,7 +976,7 @@ def markdown_to_html(markdown_text, main_featured_image_filepath=None, main_feat
     def image_replacer(match):
         alt_text = match.group(1)
         src_url = match.group(2)
-        
+
         # Check if the markdown image URL matches our transformed image's file path
         # Use os.path.basename to compare just the filename part, as the agent might give a full path
         if main_featured_image_filepath and os.path.basename(src_url) == os.path.basename(main_featured_image_filepath):
@@ -912,22 +1037,29 @@ def markdown_to_html(markdown_text, main_featured_image_filepath=None, main_feat
 
     return final_html_content
 
-def generate_enhanced_html_template(title, description, keywords, image_url_for_seo, 
-                                  image_src_for_html_body, html_blog_content, 
+def generate_enhanced_html_template(title, description, keywords, image_url_for_seo,
+                                  image_src_for_html_body, html_blog_content,
                                   category, article_url_for_disclaimer, published_date):
     """Generate enhanced HTML template with better styling and comprehensive SEO elements."""
-    
-    # Escape special characters for HTML attributes and JSON-LD
-    escaped_title = title.replace('"', '"')
-    escaped_description = description.replace('"', '"')
-    
+
+    # Escape special characters for HTML attributes (e.g., in meta tags, alt text)
+    escaped_title_html = title.replace('"', '"').replace("'", "'")
+    escaped_description_html = description.replace('"', '"').replace("'", "'")
+
+    # Use json.dumps to get correctly escaped strings for JSON values.
+    # We then slice [1:-1] to remove the outer quotes added by json.dumps,
+    # as the f-string already provides them for the JSON-LD structure.
+    # This prevents the f-string backslash error.
+    json_safe_title = json.dumps(title)[1:-1]
+    json_safe_description = json.dumps(description)[1:-1]
+
     # Enhanced structured data (JSON-LD)
     structured_data = f"""
     <script type="application/ld+json">
     {{
       "@context": "https://schema.org",
       "@type": "NewsArticle",
-      "headline": "{title.replace('"', '\\"')}",
+      "headline": "{json_safe_title}",
       "image": ["{image_url_for_seo}"],
       "datePublished": "{published_date}T00:00:00Z",
       "dateModified": "{published_date}T00:00:00Z",
@@ -948,11 +1080,11 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
         "@type": "WebPage",
         "@id": "{article_url_for_disclaimer}"
       }},
-      "description": "{description.replace('"', '\\"')}"
+      "description": "{json_safe_description}"
     }}
     </script>
     """
-    
+
     # Styles for the HTML page
     html_styles = """
     <style>
@@ -1039,7 +1171,9 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
         .featured-image {
             width: 100%;
             height: auto;
-            max-height: 450px;
+            /* Max height defined relative to its container to keep aspect ratio of 16:9 for main image part */
+            /* This height will be based on the *original content height* of the transformed image (675px) */
+            max-height: 843.75px; /* 1200 * (675 + 0.25*675) / 1200 = 1200 * 843.75 / 1200 */
             object-fit: cover;
             border-radius: 8px;
             margin-top: 25px;
@@ -1095,32 +1229,32 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
         }
     </style>
     """
-    
+    # The image_src_for_html_body should now represent the full, extended image
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{escaped_title}</title>
-    <meta name="description" content="{escaped_description}">
+    <title>{escaped_title_html}</title>
+    <meta name="description" content="{escaped_description_html}">
     <meta name="keywords" content="{keywords}">
     <meta name="robots" content="index, follow">
     <meta name="author" content="AI Content Creator">
-    
+
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="article">
     <meta property="og:url" content="{article_url_for_disclaimer}">
-    <meta property="og:title" content="{escaped_title}">
-    <meta property="og:description" content="{escaped_description}">
+    <meta property="og:title" content="{escaped_title_html}">
+    <meta property="og:description" content="{escaped_description_html}">
     <meta property="og:image" content="{image_url_for_seo}">
-    
+
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image">
     <meta property="twitter:url" content="{article_url_for_disclaimer}">
-    <meta property="twitter:title" content="{escaped_title}">
-    <meta property="twitter:description" content="{escaped_description}">
+    <meta property="twitter:title" content="{escaped_title_html}">
+    <meta property="twitter:description" content="{escaped_description_html}">
     <meta property="twitter:image" content="{image_url_for_seo}">
-    
+
     {structured_data}
     {html_styles}
 </head>
@@ -1129,7 +1263,7 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
         <div class="article-header">
             <span class="category-tag">{category.upper()}</span>
             <h1>{title}</h1>
-            {f'<img src="{image_src_for_html_body}" alt="{escaped_title}" class="featured-image">' if image_src_for_html_body else ''}
+            {f'<img src="{image_src_for_html_body}" alt="{escaped_title_html}" class="featured-image">' if image_src_for_html_body else ''}
         </div>
         <div class="article-content">
             {html_blog_content}
@@ -1142,21 +1276,100 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
 </body>
 </html>"""
 
+def post_to_blogger(html_file_path, blog_id, service_account_credentials_json_string):
+    """
+    Posts a generated HTML blog to Blogger.
+    :param html_file_path: Path to the local HTML file to be posted.
+    :param blog_id: The ID of the Blogger blog.
+    :param service_account_credentials_json_string: The JSON string of the Google Service Account credentials.
+    """
+    if not service_account_credentials_json_string:
+        logger.error("Blogger credentials are not set. Cannot post to Blogger.")
+        return False
+
+    try:
+        # Load credentials from the JSON string
+        credentials_info = json.loads(service_account_credentials_json_string)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=['https://www.googleapis.com/auth/blogger']
+        )
+
+        # Build the Blogger service client
+        blogger_service = build('blogger', 'v3', credentials=credentials)
+
+        # Read the HTML content and parse metadata
+        with open(html_file_path, 'r', encoding='utf-8') as f:
+            full_html_content = f.read()
+
+        # Extract title and tags from the HTML (or the original metadata)
+        # For simplicity, let's re-parse metadata if available, or extract from HTML
+        # Assuming the HTML metadata block is still reliable.
+        # This is a bit redundant with save_blog_post, but ensures independence.
+        metadata_match = re.search(r"title:\s*(.*?)\n.*?tags:\s*\[(.*?)\]", full_html_content, re.DOTALL | re.IGNORECASE)
+        post_title = "Generated Blog Post"
+        post_labels = []
+
+        if metadata_match:
+            post_title = metadata_match.group(1).strip()
+            tags_str = metadata_match.group(2).strip()
+            # Split tags string by comma and clean up whitespace
+            post_labels = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+        else:
+            # Fallback if metadata not found, try to get title from H1
+            h1_match = re.search(r'<h1>(.*?)</h1>', full_html_content, re.IGNORECASE | re.DOTALL)
+            if h1_match:
+                post_title = h1_match.group(1).strip()
+            logger.warning(f"Could not parse comprehensive metadata from {html_file_path}. Using fallback title/tags.")
+
+
+        # Define the post body
+        post_body = {
+            'kind': 'blogger#post',
+            'blog': {'id': blog_id},
+            'title': post_title,
+            'content': full_html_content, # Blogger API can handle raw HTML
+            'labels': post_labels,
+            'status': 'DRAFT' # Set to 'DRAFT' for review, change to 'LIVE' to publish directly
+        }
+
+        # Make the API request
+        logger.info(f"Attempting to insert blog post to Blogger: '{post_title}'...")
+        request = blogger_service.posts().insert(blogId=blog_id, body=post_body)
+        response = request.execute()
+
+        logger.info(f"✅ Successfully posted '{post_title}' to Blogger! Post ID: {response.get('id')}")
+        logger.info(f"View draft at: {response.get('url')}")
+        return True
+
+    except HttpError as e:
+        error_content = e.content.decode('utf-8')
+        logger.error(f"Failed to post to Blogger due to API error: {e}")
+        logger.error(f"Error details: {error_content}")
+        if "rateLimitExceeded" in error_content:
+            logger.error("Blogger API rate limit exceeded. Consider reducing posting frequency.")
+        return False
+    except Exception as e:
+        logger.critical(f"An unexpected error occurred during Blogger posting: {e}", exc_info=True)
+        return False
+
+
 def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, category, transformed_image_filepath, transformed_image_b64, primary_source_url):
     """
     Saves the generated blog post in an HTML file with SEO elements.
     Accepts the *transformed_image_filepath* for SEO metadata and *transformed_image_b64* for inline HTML.
     `primary_source_url` is used for the disclaimer link.
+    Returns the file path of the saved HTML blog.
     """
     # 1. Parse metadata from the top of the markdown content
     metadata, blog_content_only_markdown = parse_markdown_metadata(generated_markdown_content)
 
     # Use parsed metadata, with fallbacks to consolidated_topic_for_fallback
     title = metadata.get('title', consolidated_topic_for_fallback)
-    
+
     # Safe fallback for description, ensuring it's not too long and doesn't contain quotes
     description_fallback = f"A comprehensive look at the latest news in {category} related to '{title}'."
-    description = metadata.get('description', description_fallback).replace('"', '')[:155] # Max 155 chars recommended
+    description = metadata.get('description', description_fallback).replace('"', '').replace("'", "")[:155] # Max 155 chars recommended and remove quotes
 
     # Ensure keywords are comma-separated and clean
     keywords_from_meta = metadata.get('tags', '').replace(', ', ',').replace(' ', '_')
@@ -1167,11 +1380,11 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
 
     # Use the Base64 URI for the main image in the HTML body
     image_src_for_html_body = transformed_image_b64 if transformed_image_b64 else ''
-    
+
     # Use the file path for structured data and OG tags (recommended for SEO)
     # Ensure it's a relative path if needed, or handle as full URL in a live environment
     image_url_for_seo = transformed_image_filepath if transformed_image_filepath and transformed_image_filepath != 'None' else ''
-    
+
     published_date = metadata.get('date', datetime.now().strftime('%Y-%m-%d'))
 
     # 2. Convert markdown content to HTML, applying Base64 for the specific transformed image
@@ -1190,20 +1403,23 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
 
     # Generate the complete HTML using the enhanced template
     final_html_output = generate_enhanced_html_template(
-        title, description, keywords, image_url_for_seo, 
-        image_src_for_html_body, html_blog_content, 
+        title, description, keywords, image_url_for_seo,
+        image_src_for_html_body, html_blog_content,
         category, primary_source_url, published_date # Pass primary_source_url
     )
 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(final_html_output)
     logger.info(f"✅ Saved blog post: {file_path}")
+    return file_path # Return the path so we can pass it to post_to_blogger
+
 
 def main():
     if not validate_environment():
         logger.error("Environment validation failed. Exiting.")
         return
 
+    # Define some placeholder competitors (you might refine this per category or get dynamically)
     global_competitors = [
         "forbes.com", "reuters.com", "bloomberg.com", "theverge.com",
         "techcrunch.com", "healthline.com", "webmd.com", "espn.com",
@@ -1211,18 +1427,9 @@ def main():
         "bbc.com/news", "cnn.com", "nytimes.com"
     ]
 
-    run_start_time = datetime.now()
-    logger.info(f"--- Starting a new blog generation cycle at {run_start_time.strftime('%Y-%m-%d %H:%M:%S')} ---")
-    
-    # 1. Clear all previous output before starting a new cycle
-    clear_output_folders()
-    
-    # 2. Re-create the necessary directories (base folders and category subfolders)
-    create_initial_directories()
-
     for category in CATEGORIES:
-        logger.info(f"\n--- Processing for category: [{category.upper()}] ---")
-        
+        logger.info(f"\n--- Starting processing for category: [{category.upper()}] ---")
+
         # 1. Fetch multiple articles to facilitate consolidation
         raw_articles = fetch_gnews_articles(category, max_articles_to_fetch=NUM_SOURCE_ARTICLES_TO_AGGREGATE)
 
@@ -1242,7 +1449,7 @@ def main():
         consolidated_description = consolidated_data['combined_description']
         consolidated_content_for_ai = consolidated_data['combined_content']
         primary_source_url_for_disclaimer = consolidated_data['primary_source_url']
-        
+
         # Combine global competitors with specific ones found in the aggregated articles
         effective_competitors = list(set(global_competitors + consolidated_data['competitors']))
 
@@ -1278,8 +1485,8 @@ def main():
                 # Pass the consolidated topic and effective competitors to research agent
                 research_output = perform_research_agent(consolidated_topic, effective_competitors)
                 if not research_output:
-                    logger.error(f"Failed to get research output for: '{consolidated_topic}'. Skipping content generation for this category.")
-                    continue # Skip to next category if research fails
+                    logger.error(f"Failed to get research output for: '{consolidated_topic}'. Skipping content generation.")
+                    continue
                 logger.info(f"  Research successful. Suggested Title: '{research_output.get('suggested_blog_title', 'N/A')}'")
                 logger.info(f"  Primary Keywords: {research_output.get('primary_keywords', [])}")
 
@@ -1292,14 +1499,14 @@ def main():
 
                 if not generated_blog_markdown:
                     logger.error(f"Failed to generate blog content for: '{consolidated_topic}'. Skipping save.")
-                    continue # Skip to next category if content generation fails
+                    continue
             else:
                 logger.warning("GEMINI_API_KEY is not set. Skipping AI content generation. Only image processing and basic HTML saving will occur (if possible).")
                 # Provide dummy data if AI is skipped, to allow saving a basic HTML.
                 # Use the consolidated topic for the title here.
                 generated_blog_markdown = (
                     f"title: {consolidated_topic}\n"
-                    f"description: {consolidated_description}\n"
+                    f"description: {consolidated_description.replace('\"', '').replace('\\n', ' ').strip()[:155]}\n" # Ensure this fallback is also safe
                     f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
                     f"categories: [{category}]\n"
                     f"tags: [{category}, news]\n"
@@ -1312,8 +1519,8 @@ def main():
 
 
             # --- Step 3: Save the blog post ---
-            # Pass the consolidated topic as the fallback title
-            save_blog_post(
+            # Capture the file path returned by save_blog_post
+            saved_html_file_path = save_blog_post(
                 consolidated_topic, # This is now the fallback title if metadata parsing fails
                 generated_blog_markdown,
                 category,
@@ -1322,14 +1529,22 @@ def main():
                 primary_source_url_for_disclaimer # Pass the URL of one of the original source articles for disclaimer
             )
 
+            # --- Step 4: Post to Blogger ---
+            if saved_html_file_path and GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON and BLOGGER_BLOG_ID:
+                post_to_blogger(
+                    saved_html_file_path,
+                    BLOGGER_BLOG_ID,
+                    GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON
+                )
+            else:
+                logger.warning("Skipping Blogger post due to missing HTML file or API credentials.")
+
         except Exception as e:
             logger.critical(f"An unexpected error occurred during blog generation workflow for '{consolidated_topic}': {e}", exc_info=True)
         finally:
-            # Add a small delay between processing each category to spread out API calls
-            time.sleep(10) # 10 seconds between each category's blog generation
-            
-    logger.info(f"--- Blog generation cycle completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
-
+            # Add a delay between processing each category to respect API rate limits and avoid overwhelming resources
+            # Each category now involves fetching multiple articles and two LLM calls, plus image ops.
+            time.sleep(30)
 
 if __name__ == '__main__':
     main()
