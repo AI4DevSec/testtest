@@ -5,7 +5,8 @@ import requests
 import google.generativeai as genai
 from google.api_core import exceptions # ADDED THIS IMPORT for proper exception handling
 from dotenv import load_dotenv
-import json
+import json # Make sure json is imported
+
 import re
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
@@ -1016,16 +1017,17 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
                                   category, article_url_for_disclaimer, published_date):
     """Generate enhanced HTML template with better styling and comprehensive SEO elements."""
 
-    # Escape special characters for HTML attributes and JSON-LD
+    # Escape special characters for HTML attributes (e.g., in meta tags, alt text)
     escaped_title_html = title.replace('"', '"').replace("'", "'")
     escaped_description_html = description.replace('"', '"').replace("'", "'")
 
     # --- FIX START ---
-    # Prepare JSON-safe strings by double-escaping backslashes and escaping quotes
-    # The json.dumps will handle the escaping, but we need to ensure the source string is ready for it.
-    # For a simple replace, we can do it directly:
-    json_safe_title = title.replace('"', '\\"').replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r')
-    json_safe_description = description.replace('"', '\\"').replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r')
+    # Use json.dumps to get correctly escaped strings for JSON values.
+    # We then slice [1:-1] to remove the outer quotes added by json.dumps,
+    # as the f-string already provides them for the JSON-LD structure.
+    # This prevents the f-string backslash error.
+    json_safe_title = json.dumps(title)[1:-1]
+    json_safe_description = json.dumps(description)[1:-1]
     # --- FIX END ---
 
     # Enhanced structured data (JSON-LD)
