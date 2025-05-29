@@ -3,12 +3,18 @@ import random
 import time
 import requests
 import google.generativeai as genai
-from google.api_core import exceptions # ADDED THIS IMPORT for proper exception handling
+from google.api_core import exceptions
 from dotenv import load_dotenv
-import json # Make sure json is imported
+import json
 
-# New imports for Google Blogger API
-from google.oauth2 import service_account
+# --- IMPORTS FOR OAuth CLIENT ID (USER CREDENTIALS) ---
+# Service Account ke imports hata diye gaye hain
+from google.oauth2.credentials import Credentials as UserCredentials # Renamed to avoid conflict
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+# --- END OAuth IMPORTS ---
+
+# Original imports for Google Blogger API (build, HttpError)
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -20,6 +26,7 @@ import logging
 from datetime import datetime
 import unicodedata
 import platform
+# import markdown2 # markdown2 library ko install karna zaroori hai agar use kar rahe ho
 
 # Setup logging
 logging.basicConfig(
@@ -33,42 +40,50 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # IMPORTANT: How to run this script:
-# 1. Ensure you have a .env file with GNEWS_API_KEY and GEMINI_API_KEY.
-# 2. Install required libraries: pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib
-# 3. Run from terminal: python your_script_name.py
+# 1. Ensure you have a .env file with GNEWS_API_KEY and GEMINI_API_KEY (for local testing).
+# 2. Before running main.py for the first time, run generate_token.py (from Part 2) to create token_blogger.json.
+# 3. Install required libraries: pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib markdown2
+# 4. Run from terminal: python your_script_name.py
 
-# Load environment variables
+# Load environment variables (for local testing)
 load_dotenv()
 
 # CONFIGURATION
 GNEWS_API_KEY = os.getenv('GNEWS_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 CATEGORIES = ["technology", "health", "sports", "business", "entertainment"]
-# This defines how many *source articles* we will attempt to aggregate into *one* new blog post.
 NUM_SOURCE_ARTICLES_TO_AGGREGATE = 5
 LANGUAGE = 'en'
 BRANDING_LOGO_PATH = os.getenv('BRANDING_LOGO_PATH', None)
 IMAGE_OUTPUT_FOLDER = "transformed_images"
 BLOG_OUTPUT_FOLDER = "blog_drafts"
 
-# Blogger Specific Configuration
-BLOGGER_BLOG_ID = os.getenv('BLOGGER_BLOG_ID', '8169847264446388236') # Your blog ID
-# The service account credentials JSON string will come from GitHub Secrets
-GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON = os.getenv('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS')
+# --- BLOGGER AUTHENTICATION CONFIGURATION ---
+# BLOGGER_BLOG_ID can be read from .env or directly from GitHub Secret
+BLOGGER_BLOG_ID = os.getenv('BLOGGER_BLOG_ID', '8169847264446388236') # Apni blog ID yahan daalo, ya .env mein.
 
+# These will hold the JSON strings directly from GitHub Secrets OR be read from local files
+# In GitHub Actions, these will be populated from secrets.
+# Locally, if these env vars are not set, the get_blogger_oauth_credentials() function will
+# look for client_secrets.json and token_blogger.json files.
+GOOGLE_CLIENT_SECRETS_JSON = os.getenv('GOOGLE_CLIENT_SECRETS_JSON') # Yeh GitHub Secret se aayega
+GOOGLE_OAUTH_TOKEN_JSON = os.getenv('GOOGLE_OAUTH_TOKEN_JSON')       # Yeh GitHub Secret se aayega
 
-# LLM Retry Configuration
+# Define Blogger Scopes
+BLOGGER_SCOPES = ['https://www.googleapis.com/auth/blogger']
+
+# --- LLM Retry Configuration ---
 LLM_MAX_RETRIES = 5
 LLM_INITIAL_RETRY_DELAY_SECONDS = 5
 
-# Enhanced font configuration with fallbacks
+# --- Enhanced font configuration with fallbacks ---
 FONT_PATHS = {
     'mac': [
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Arial.ttf",
         "/Library/Fonts/Arial.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/SFProText-Regular.ttf" # A common modern macOS font
+        "/System/Library/Fonts/SFProText-Regular.ttf"
     ],
     'windows': [
         "C:/Windows/Fonts/arial.ttf",
@@ -78,8 +93,8 @@ FONT_PATHS = {
     'linux': [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/TTF/arial.ttf", # Might exist if ttf-mscorefonts-installer is used
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf" # Common on many Linux distros
+        "/usr/share/fonts/TTF/arial.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
     ]
 }
 
@@ -118,6 +133,101 @@ if GEMINI_API_KEY:
 else:
     logger.error("GEMINI_API_KEY not set. Gemini functions will not work.")
 
+# --- NEW/MODIFIED FUNCTION FOR OAuth CLIENT ID AUTHENTICATION ---
+def get_blogger_oauth_credentials():
+    """
+    Obtains OAuth 2.0 credentials for Blogger API using client_secrets.json and token_blogger.json.
+    Prioritizes environment variables (for CI/CD) then local files (for development).
+    """
+    creds = None
+    CLIENT_SECRETS_FILE = 'client_secrets.json' # Local file name (for local testing)
+    TOKEN_FILE = 'token_blogger.json' # Local file name (for local testing)
+
+    # 1. Sabse pehle GitHub Secrets (Environment Variables) se load karne ki koshish karo
+    if GOOGLE_OAUTH_TOKEN_JSON:
+        try:
+            token_info = json.loads(GOOGLE_OAUTH_TOKEN_JSON)
+            creds = UserCredentials.from_authorized_user_info(token_info, BLOGGER_SCOPES)
+            logger.info("INFO: Blogger OAuth token loaded from environment variable (GitHub Secret).")
+        except json.JSONDecodeError as e:
+            logger.error(f"ERROR: GOOGLE_OAUTH_TOKEN_JSON is not valid JSON: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"ERROR: Could not load Blogger OAuth token from env var: {e}")
+            return None
+
+    # Agar credentials valid hain lekin expired hain, toh refresh karne ki koshish karo
+    if creds and creds.expired and creds.refresh_token:
+        logger.info("INFO: Blogger OAuth token expired, attempting to refresh...")
+        try:
+            creds.refresh(Request())
+            logger.info("INFO: Blogger OAuth token refreshed successfully.")
+            # Important: If refreshed, the token_info might change (new expiry).
+            # If running locally (not CI), you might want to save it back.
+            if not os.getenv('CI'): # Check if not running in CI (e.g., GitHub Actions)
+                with open(TOKEN_FILE, 'w') as token_file:
+                    token_file.write(creds.to_json())
+                logger.info(f"INFO: Refreshed Blogger OAuth token saved to '{TOKEN_FILE}'.")
+        except Exception as e:
+            logger.error(f"ERROR: Failed to refresh Blogger OAuth token: {e}. You might need to re-authenticate manually by deleting {TOKEN_FILE}.")
+            creds = None
+
+    # Agar koi valid credentials environment variable se nahi mile (ya refresh fail hua),
+    # aur hum GitHub Actions (CI environment) mein nahi hain, toh local files aur interactive flow try karo.
+    # 'CI' env var is usually 'true' in GitHub Actions. So, this block will be skipped in Actions.
+    if not creds and not os.getenv('CI'):
+        # Local token file se load karne ki koshish karo
+        if os.path.exists(TOKEN_FILE):
+            try:
+                creds = UserCredentials.from_authorized_user_file(TOKEN_FILE, BLOGGER_SCOPES)
+                logger.info(f"INFO: Blogger OAuth token loaded from local file '{TOKEN_FILE}'.")
+            except Exception as e:
+                logger.warning(f"WARNING: Could not load Blogger OAuth token from local file '{TOKEN_FILE}': {e}. Will re-authenticate.")
+                creds = None
+
+        # Agar ab bhi credentials nahi mile, toh local interactive OAuth flow initiate karo
+        if not creds:
+            # Client secrets ko environment variable se load karne ki koshish karo (agar .env mein set hain)
+            # ya phir local client_secrets.json file se load karo.
+            client_config_info = {}
+            if GOOGLE_CLIENT_SECRETS_JSON: # Agar GOOGLE_CLIENT_SECRETS_JSON .env mein set hai
+                try:
+                    client_config_info = json.loads(GOOGLE_CLIENT_SECRETS_JSON)
+                    logger.info("INFO: Client secrets loaded from environment variable (local .env).")
+                except json.JSONDecodeError as e:
+                    logger.critical(f"CRITICAL ERROR: GOOGLE_CLIENT_SECRETS_JSON in env is not valid JSON: {e}")
+                    return None
+            elif os.path.exists(CLIENT_SECRETS_FILE): # Agar .env mein nahi hai, toh local file try karo
+                try:
+                    with open(CLIENT_SECRETS_FILE, 'r') as f:
+                        client_config_info = json.load(f)
+                    logger.info(f"INFO: Client secrets loaded from local file '{CLIENT_SECRETS_FILE}'.")
+                except Exception as e:
+                    logger.critical(f"CRITICAL ERROR: Could not load client secrets from '{CLIENT_SECRETS_FILE}': {e}")
+                    return None
+            else:
+                logger.critical(f"CRITICAL ERROR: No client secrets found (neither in GOOGLE_CLIENT_SECRETS_JSON env nor local '{CLIENT_SECRETS_FILE}'). Cannot perform OAuth flow.")
+                return None
+
+
+            logger.info(f"INFO: Initiating interactive OAuth flow for Blogger. Please follow browser instructions.")
+            flow = InstalledAppFlow.from_client_config(client_config_info, BLOGGER_SCOPES)
+            try:
+                # Yeh browser kholega user interaction ke liye (GitHub Actions mein nahi chalega)
+                creds = flow.run_local_server(port=0, prompt='consent', authorization_prompt_message='Please authorize this application to access your Blogger account.')
+                with open(TOKEN_FILE, 'w') as token_file:
+                    token_file.write(creds.to_json())
+                logger.info(f"INFO: New token saved to '{TOKEN_FILE}'.")
+            except Exception as e:
+                logger.error(f"ERROR during local OAuth flow: {e}")
+                return None
+
+    if creds and creds.valid:
+        logger.info("INFO: Valid Blogger OAuth credentials obtained successfully.")
+    else:
+        logger.error("ERROR: Could not obtain valid Blogger OAuth credentials. Posting to Blogger will likely fail.")
+    return creds
+
 def validate_environment():
     """Validate that all required environment variables and dependencies are set"""
     errors = []
@@ -131,24 +241,19 @@ def validate_environment():
     # Validate Blogger API credentials
     if not BLOGGER_BLOG_ID:
         errors.append("BLOGGER_BLOG_ID not set. Cannot post to Blogger.")
-    if not GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON:
-        errors.append("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS not found in environment variables. Cannot post to Blogger.")
-    else:
-        try:
-            json.loads(GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON)
-        except json.JSONDecodeError:
-            errors.append("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS is not a valid JSON string.")
-
+    # Service Account specific credential validation code hata diya gaya hai
 
     try:
         import PIL
         import google.generativeai
-        from google.api_core import exceptions # Check if api_core.exceptions is importable
+        from google.api_core import exceptions
         import requests
         import googleapiclient.discovery
-        import google.oauth2.service_account
+        # OAuth authentication ke liye zaroori imports check karein
+        import google_auth_oauthlib.flow
+        import google.oauth2.credentials
     except ImportError as e:
-        errors.append(f"Missing required package: {e}. Please run 'pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib'.")
+        errors.append(f"Missing required package: {e}. Please run 'pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib markdown2'.")
 
     if errors:
         for error in errors:
@@ -603,7 +708,7 @@ def transform_image(image_url, title_text, category_text, output_category_folder
         # It should start below where the original 16:9 image *ends* on the canvas
         min_y_for_text = target_content_height + horizontal_padding_text
         if current_y_text_draw < min_y_for_text:
-            current_y_text_draw = min_y_text
+            current_y_text_draw = min_y_for_text
 
 
         # Draw each line of the title with shadow
@@ -985,7 +1090,7 @@ def markdown_to_html(markdown_text, main_featured_image_filepath=None, main_feat
         else:
             # For other images (e.g., external ones generated by LLM), keep the original URL
             # Ensure the alt text is escaped to prevent breaking HTML attributes
-            escaped_alt_text = alt_text.replace('"', '"') # Use " for attribute safety
+            escaped_alt_text = alt_text.replace('"', '&quot;') # Use &quot; for attribute safety
             return f'<img src="{src_url}" alt="{escaped_alt_text}" class="in-content-image">'
 
     html_text = re.sub(r'!\[(.*?)\]\((.*?)\)', image_replacer, html_text)
@@ -1043,13 +1148,12 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
     """Generate enhanced HTML template with better styling and comprehensive SEO elements."""
 
     # Escape special characters for HTML attributes (e.g., in meta tags, alt text)
-    escaped_title_html = title.replace('"', '"').replace("'", "'")
-    escaped_description_html = description.replace('"', '"').replace("'", "'")
+    escaped_title_html = title.replace('"', '&quot;').replace("'", '&#39;')
+    escaped_description_html = description.replace('"', '&quot;').replace("'", '&#39;')
 
     # Use json.dumps to get correctly escaped strings for JSON values.
     # We then slice [1:-1] to remove the outer quotes added by json.dumps,
     # as the f-string already provides them for the JSON-LD structure.
-    # This prevents the f-string backslash error.
     json_safe_title = json.dumps(title)[1:-1]
     json_safe_description = json.dumps(description)[1:-1]
 
@@ -1276,36 +1380,27 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
 </body>
 </html>"""
 
-def post_to_blogger(html_file_path, blog_id, service_account_credentials_json_string):
+# --- MODIFIED post_to_blogger function (to accept UserCredentials) ---
+# Service Account specific credential string parameter hata diya gaya hai
+def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
     """
     Posts a generated HTML blog to Blogger.
     :param html_file_path: Path to the local HTML file to be posted.
     :param blog_id: The ID of the Blogger blog.
-    :param service_account_credentials_json_string: The JSON string of the Google Service Account credentials.
+    :param blogger_user_credentials: The UserCredentials object obtained from OAuth flow.
     """
-    if not service_account_credentials_json_string:
-        logger.error("Blogger credentials are not set. Cannot post to Blogger.")
+    if not blogger_user_credentials or not blogger_user_credentials.valid:
+        logger.error("Blogger User Credentials are not valid. Cannot post to Blogger.")
         return False
 
     try:
-        # Load credentials from the JSON string
-        credentials_info = json.loads(service_account_credentials_json_string)
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_info,
-            scopes=['https://www.googleapis.com/auth/blogger']
-        )
-
-        # Build the Blogger service client
-        blogger_service = build('blogger', 'v3', credentials=credentials)
+        # UserCredentials object ko directly use karo
+        blogger_service = build('blogger', 'v3', credentials=blogger_user_credentials)
 
         # Read the HTML content and parse metadata
         with open(html_file_path, 'r', encoding='utf-8') as f:
             full_html_content = f.read()
 
-        # Extract title and tags from the HTML (or the original metadata)
-        # For simplicity, let's re-parse metadata if available, or extract from HTML
-        # Assuming the HTML metadata block is still reliable.
-        # This is a bit redundant with save_blog_post, but ensures independence.
         metadata_match = re.search(r"title:\s*(.*?)\n.*?tags:\s*\[(.*?)\]", full_html_content, re.DOTALL | re.IGNORECASE)
         post_title = "Generated Blog Post"
         post_labels = []
@@ -1313,27 +1408,22 @@ def post_to_blogger(html_file_path, blog_id, service_account_credentials_json_st
         if metadata_match:
             post_title = metadata_match.group(1).strip()
             tags_str = metadata_match.group(2).strip()
-            # Split tags string by comma and clean up whitespace
             post_labels = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
         else:
-            # Fallback if metadata not found, try to get title from H1
             h1_match = re.search(r'<h1>(.*?)</h1>', full_html_content, re.IGNORECASE | re.DOTALL)
             if h1_match:
                 post_title = h1_match.group(1).strip()
             logger.warning(f"Could not parse comprehensive metadata from {html_file_path}. Using fallback title/tags.")
 
-
-        # Define the post body
         post_body = {
             'kind': 'blogger#post',
             'blog': {'id': blog_id},
             'title': post_title,
-            'content': full_html_content, # Blogger API can handle raw HTML
+            'content': full_html_content,
             'labels': post_labels,
             'status': 'LIVE' # Set to 'DRAFT' for review, change to 'LIVE' to publish directly
         }
 
-        # Make the API request
         logger.info(f"Attempting to insert blog post to Blogger: '{post_title}'...")
         request = blogger_service.posts().insert(blogId=blog_id, body=post_body)
         response = request.execute()
@@ -1348,6 +1438,8 @@ def post_to_blogger(html_file_path, blog_id, service_account_credentials_json_st
         logger.error(f"Error details: {error_content}")
         if "rateLimitExceeded" in error_content:
             logger.error("Blogger API rate limit exceeded. Consider reducing posting frequency.")
+        elif "User lacks permission" in str(e) or "insufficient permission" in str(e).lower():
+            logger.error("Blogger: User lacks permission to post. Ensure the authenticated Google account has Author/Admin rights on the target blog.")
         return False
     except Exception as e:
         logger.critical(f"An unexpected error occurred during Blogger posting: {e}", exc_info=True)
@@ -1369,7 +1461,7 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
 
     # Safe fallback for description, ensuring it's not too long and doesn't contain quotes
     description_fallback = f"A comprehensive look at the latest news in {category} related to '{title}'."
-    description = metadata.get('description', description_fallback).replace('"', '').replace("'", "")[:155] # Max 155 chars recommended and remove quotes
+    description = metadata.get('description', description_fallback).replace('"', '&quot;').replace("'", '&#39;')[:155] # Max 155 chars recommended and HTML escape quotes
 
     # Ensure keywords are comma-separated and clean
     keywords_from_meta = metadata.get('tags', '').replace(', ', ',').replace(' ', '_')
@@ -1411,15 +1503,30 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(final_html_output)
     logger.info(f"✅ Saved blog post: {file_path}")
-    return file_path # Return the path so we can pass it to post_to_blogger
+    return file_path
 
 
+# --- MODIFIED main function ---
 def main():
+    blogger_oauth_credentials = None # Initialize credentials variable
+
     if not validate_environment():
         logger.error("Environment validation failed. Exiting.")
         return
 
-    # Define some placeholder competitors (you might refine this per category or get dynamically)
+    # --- Authenticate with Blogger using OAuth 2.0 (User Credentials) ---
+    # This will try to load from secrets, then local files, then interactive flow
+    if BLOGGER_BLOG_ID: # Only try to get creds if BLOG_ID is set
+        logger.info("\n--- Authenticating with Blogger using OAuth 2.0 ---")
+        blogger_oauth_credentials = get_blogger_oauth_credentials()
+        if not blogger_oauth_credentials:
+            logger.critical("CRITICAL: Failed to obtain Blogger OAuth credentials. Cannot post to Blogger. Exiting.")
+            return
+        logger.info("--- Blogger OAuth Authentication Successful ---\n")
+    else:
+        logger.warning("INFO: BLOGGER_BLOG_ID not configured. Blogger posting will be skipped.")
+
+
     global_competitors = [
         "forbes.com", "reuters.com", "bloomberg.com", "theverge.com",
         "techcrunch.com", "healthline.com", "webmd.com", "espn.com",
@@ -1430,14 +1537,12 @@ def main():
     for category in CATEGORIES:
         logger.info(f"\n--- Starting processing for category: [{category.upper()}] ---")
 
-        # 1. Fetch multiple articles to facilitate consolidation
         raw_articles = fetch_gnews_articles(category, max_articles_to_fetch=NUM_SOURCE_ARTICLES_TO_AGGREGATE)
 
         if not raw_articles:
             logger.info(f"No raw articles fetched for {category}. Skipping category.")
             continue
 
-        # 2. Aggregate raw articles into a single, consolidated data structure
         consolidated_data = aggregate_articles(raw_articles, category)
 
         if not consolidated_data:
@@ -1450,7 +1555,6 @@ def main():
         consolidated_content_for_ai = consolidated_data['combined_content']
         primary_source_url_for_disclaimer = consolidated_data['primary_source_url']
 
-        # Combine global competitors with specific ones found in the aggregated articles
         effective_competitors = list(set(global_competitors + consolidated_data['competitors']))
 
         logger.info(f"\n  Starting workflow for consolidated topic: '{consolidated_topic[:70]}...'")
@@ -1458,7 +1562,6 @@ def main():
         transformed_image_filepath = None
         transformed_image_b64 = None
         if consolidated_image_url:
-            # Generate a safe filename for the image using the consolidated topic
             safe_image_filename = sanitize_filename(consolidated_topic)
             transformed_image_filepath, transformed_image_b64 = transform_image(
                 consolidated_image_url,
@@ -1482,7 +1585,6 @@ def main():
 
             # --- Step 1: Research Agent (Gemini Call 1) ---
             if GEMINI_API_KEY:
-                # Pass the consolidated topic and effective competitors to research agent
                 research_output = perform_research_agent(consolidated_topic, effective_competitors)
                 if not research_output:
                     logger.error(f"Failed to get research output for: '{consolidated_topic}'. Skipping content generation.")
@@ -1492,9 +1594,9 @@ def main():
 
                 # --- Step 2: Content Generator Agent (Gemini Call 2) ---
                 generated_blog_markdown = generate_content_agent(
-                    consolidated_article_data_for_ai, # Pass the consolidated data for synthesis
-                    research_output,                  # Pass the structured research output (including new title)
-                    transformed_image_filepath        # Pass the path to the transformed image for markdown generation
+                    consolidated_article_data_for_ai,
+                    research_output,
+                    transformed_image_filepath
                 )
 
                 if not generated_blog_markdown:
@@ -1502,11 +1604,9 @@ def main():
                     continue
             else:
                 logger.warning("GEMINI_API_KEY is not set. Skipping AI content generation. Only image processing and basic HTML saving will occur (if possible).")
-                # Provide dummy data if AI is skipped, to allow saving a basic HTML.
-                # Use the consolidated topic for the title here.
                 generated_blog_markdown = (
                     f"title: {consolidated_topic}\n"
-                    f"description: {consolidated_description.replace('\"', '').replace('\\n', ' ').strip()[:155]}\n" # Ensure this fallback is also safe
+                    f"description: {consolidated_description.replace('\"', '&quot;').replace('\\n', ' ').strip()[:155]}\n"
                     f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
                     f"categories: [{category}]\n"
                     f"tags: [{category}, news]\n"
@@ -1519,31 +1619,29 @@ def main():
 
 
             # --- Step 3: Save the blog post ---
-            # Capture the file path returned by save_blog_post
             saved_html_file_path = save_blog_post(
-                consolidated_topic, # This is now the fallback title if metadata parsing fails
+                consolidated_topic,
                 generated_blog_markdown,
                 category,
                 transformed_image_filepath,
                 transformed_image_b64,
-                primary_source_url_for_disclaimer # Pass the URL of one of the original source articles for disclaimer
+                primary_source_url_for_disclaimer
             )
 
             # --- Step 4: Post to Blogger ---
-            if saved_html_file_path and GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON and BLOGGER_BLOG_ID:
+            # blogger_oauth_credentials ab UserCredentials object hai, service account string nahi
+            if saved_html_file_path and blogger_oauth_credentials and BLOGGER_BLOG_ID:
                 post_to_blogger(
                     saved_html_file_path,
                     BLOGGER_BLOG_ID,
-                    GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON
+                    blogger_oauth_credentials # Yahan credentials object pass kar rahe hain
                 )
             else:
-                logger.warning("Skipping Blogger post due to missing HTML file or API credentials.")
+                logger.warning("Skipping Blogger post due to missing HTML file or Blogger credentials/ID.")
 
         except Exception as e:
             logger.critical(f"An unexpected error occurred during blog generation workflow for '{consolidated_topic}': {e}", exc_info=True)
         finally:
-            # Add a delay between processing each category to respect API rate limits and avoid overwhelming resources
-            # Each category now involves fetching multiple articles and two LLM calls, plus image ops.
             time.sleep(30)
 
 if __name__ == '__main__':
