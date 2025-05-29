@@ -2,8 +2,8 @@ name: Run Blog Creator Regularly
 
 on:
   schedule:
-    # Runs every 10 minutes
-    - cron: '*/10 * * * *' 
+    # Runs every 2 hours (at 0 minutes past the hour, every 2nd hour)
+    - cron: '0 */2 * * *'
   workflow_dispatch: # Allows you to manually trigger the workflow from the GitHub UI
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5 # Action to set up Python environment
       with:
-        python-version: '3.12' # Specify a compatible Python version (e.g., '3.10', '3.11')
+        python-version: '3.9' # Specify a compatible Python version (e.g., '3.10', '3.11')
 
     - name: Install dependencies
       run: |
@@ -29,7 +29,7 @@ jobs:
         GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }} # Access API key from GitHub Secrets
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # Access API key from GitHub Secrets
         # Uncomment and set if you use a logo and it's in your repo root:
-        # BRANDING_LOGO_PATH: 'my_logo.png' 
+        # BRANDING_LOGO_PATH: 'my_logo.png'
       run: |
         python main.py # Execute your Python script
 
