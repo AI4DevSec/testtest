@@ -1330,7 +1330,7 @@ def post_to_blogger(html_file_path, blog_id, service_account_credentials_json_st
             'title': post_title,
             'content': full_html_content, # Blogger API can handle raw HTML
             'labels': post_labels,
-            'status': 'DRAFT' # Set to 'DRAFT' for review, change to 'LIVE' to publish directly
+            'status': 'LIVE' # Set to 'DRAFT' for review, change to 'LIVE' to publish directly
         }
 
         # Make the API request
@@ -1339,7 +1339,7 @@ def post_to_blogger(html_file_path, blog_id, service_account_credentials_json_st
         response = request.execute()
 
         logger.info(f"✅ Successfully posted '{post_title}' to Blogger! Post ID: {response.get('id')}")
-        logger.info(f"View draft at: {response.get('url')}")
+        logger.info(f"View live at: {response.get('url')}")
         return True
 
     except HttpError as e:
