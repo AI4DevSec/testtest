@@ -22,12 +22,15 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt # Install libraries from requirements.txt
+        # Install the new libraries needed for Blogger API
+        pip install -r requirements.txt google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
     - name: Run Python script
       env:
         GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }} # Access API key from GitHub Secrets
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # Access API key from GitHub Secrets
+        BLOGGER_BLOG_ID: '8169847264446388236' # Your specific blog ID
+        GOOGLE_SERVICE_ACCOUNT_CREDENTIALS: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS }} # Access Blogger credentials
         # Uncomment and set if you use a logo and it's in your repo root:
         # BRANDING_LOGO_PATH: 'my_logo.png'
       run: |
