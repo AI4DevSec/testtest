@@ -755,17 +755,13 @@ def generate_content_agent(consolidated_article_data, research_output, transform
     consolidated_article_data_for_prompt = consolidated_article_data.copy()
     consolidated_article_data_for_prompt['combined_content'] = combined_content_for_prompt
 
-    # --- START OF FIX: Safely prepare description for embedding in the prompt ---
+    # Safely prepare description for embedding in the prompt
     raw_description_for_prompt = consolidated_article_data.get(
         'combined_description',
         'A comprehensive and insightful look at the latest news and trends.'
     )
-    # Ensure it's safe for inclusion in the f-string literal:
-    # 1. Remove double quotes (which would break the f-string's delimiter).
-    # 2. Replace newlines with spaces to keep it on a single line for the prompt's metadata.
-    # 3. Truncate to desired length.
     blog_description_for_prompt = raw_description_for_prompt.replace('"', '').replace('\n', ' ').replace('\r', ' ').strip()[:155]
-    # --- END OF FIX ---
+
 
     prompt = (
         f"You are a specialized Blog Writing Agent that transforms SEO research and aggregated article data "
@@ -1021,8 +1017,16 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
     """Generate enhanced HTML template with better styling and comprehensive SEO elements."""
 
     # Escape special characters for HTML attributes and JSON-LD
-    escaped_title = title.replace('"', '"').replace("'", "'")
-    escaped_description = description.replace('"', '"').replace("'", "'")
+    escaped_title_html = title.replace('"', '"').replace("'", "'")
+    escaped_description_html = description.replace('"', '"').replace("'", "'")
+
+    # --- FIX START ---
+    # Prepare JSON-safe strings by double-escaping backslashes and escaping quotes
+    # The json.dumps will handle the escaping, but we need to ensure the source string is ready for it.
+    # For a simple replace, we can do it directly:
+    json_safe_title = title.replace('"', '\\"').replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r')
+    json_safe_description = description.replace('"', '\\"').replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r')
+    # --- FIX END ---
 
     # Enhanced structured data (JSON-LD)
     structured_data = f"""
@@ -1030,7 +1034,7 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
     {{
       "@context": "https://schema.org",
       "@type": "NewsArticle",
-      "headline": "{title.replace('"', '\\"')}",
+      "headline": "{json_safe_title}",
       "image": ["{image_url_for_seo}"],
       "datePublished": "{published_date}T00:00:00Z",
       "dateModified": "{published_date}T00:00:00Z",
@@ -1051,7 +1055,7 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
         "@type": "WebPage",
         "@id": "{article_url_for_disclaimer}"
       }},
-      "description": "{description.replace('"', '\\"')}"
+      "description": "{json_safe_description}"
     }}
     </script>
     """
@@ -1206,8 +1210,8 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{escaped_title}</title>
-    <meta name="description" content="{escaped_description}">
+    <title>{escaped_title_html}</title>
+    <meta name="description" content="{escaped_description_html}">
     <meta name="keywords" content="{keywords}">
     <meta name="robots" content="index, follow">
     <meta name="author" content="AI Content Creator">
@@ -1215,15 +1219,15 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="article">
     <meta property="og:url" content="{article_url_for_disclaimer}">
-    <meta property="og:title" content="{escaped_title}">
-    <meta property="og:description" content="{escaped_description}">
+    <meta property="og:title" content="{escaped_title_html}">
+    <meta property="og:description" content="{escaped_description_html}">
     <meta property="og:image" content="{image_url_for_seo}">
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image">
     <meta property="twitter:url" content="{article_url_for_disclaimer}">
-    <meta property="twitter:title" content="{escaped_title}">
-    <meta property="twitter:description" content="{escaped_description}">
+    <meta property="twitter:title" content="{escaped_title_html}">
+    <meta property="twitter:description" content="{escaped_description_html}">
     <meta property="twitter:image" content="{image_url_for_seo}">
 
     {structured_data}
@@ -1234,7 +1238,7 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
         <div class="article-header">
             <span class="category-tag">{category.upper()}</span>
             <h1>{title}</h1>
-            {f'<img src="{image_src_for_html_body}" alt="{escaped_title}" class="featured-image">' if image_src_for_html_body else ''}
+            {f'<img src="{image_src_for_html_body}" alt="{escaped_title_html}" class="featured-image">' if image_src_for_html_body else ''}
         </div>
         <div class="article-content">
             {html_blog_content}
