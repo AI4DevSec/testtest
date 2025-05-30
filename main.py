@@ -895,7 +895,7 @@ def generate_content_agent(consolidated_article_data, research_output, transform
         f"into comprehensive, publication-ready, SEO-optimized blog posts. You excel at creating in-depth, "
         f"authoritative content by synthesizing information from multiple sources, while maintaining reader engagement and SEO best practices.\n\n"
         f"## Input Requirements:\n"
-        f"1.  `aggregated_source_data`: {json.dumps(consolidated_article_data_for_ai, indent=2)}\n"
+        f"1.  `aggregated_source_data`: {json.dumps(consolidated_article_data_for_prompt, indent=2)}\n"
         f"2.  `research_output`: {json.dumps(research_output, indent=2)}\n"
         f"3.  `transformed_image_path_info`: '{image_path_for_prompt}' (This is the file path to the main featured image. Do NOT embed this image again within the content body. It will be handled separately in the HTML template.)\n\n"
         f"## Content Specifications:\n"
