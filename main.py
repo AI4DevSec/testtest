@@ -8,8 +8,7 @@ from dotenv import load_dotenv
 import json
 
 # --- IMPORTS FOR OAuth CLIENT ID (USER CREDENTIALS) ---
-# Service Account ke imports hata diye gaye hain
-from google.oauth2.credentials import Credentials as UserCredentials # Renamed to avoid conflict
+from google.oauth2.credentials import Credentials as UserCredentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 # --- END OAuth IMPORTS ---
@@ -26,7 +25,6 @@ import logging
 from datetime import datetime
 import unicodedata
 import platform
-# import markdown2 # markdown2 library ko install karna zaroori hai agar use kar rahe ho
 
 # Setup logging
 logging.basicConfig(
@@ -42,7 +40,7 @@ logger = logging.getLogger(__name__)
 # IMPORTANT: How to run this script:
 # 1. Ensure you have a .env file with GNEWS_API_KEY and GEMINI_API_KEY (for local testing).
 # 2. Before running main.py for the first time, run generate_token.py (from Part 2) to create token_blogger.json.
-# 3. Install required libraries: pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib markdown2
+# 3. Install required libraries: pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib
 # 4. Run from terminal: python your_script_name.py
 
 # Load environment variables (for local testing)
@@ -59,7 +57,6 @@ IMAGE_OUTPUT_FOLDER = "transformed_images"
 BLOG_OUTPUT_FOLDER = "blog_drafts"
 
 # --- BLOGGER AUTHENTICATION CONFIGURATION ---
-# BLOGGER_BLOG_ID can be read from .env or directly from GitHub Secret
 BLOGGER_BLOG_ID = os.getenv('BLOGGER_BLOG_ID', '8169847264446388236') # Apni blog ID yahan daalo, ya .env mein.
 
 # These will hold the JSON strings directly from GitHub Secrets OR be read from local files
@@ -241,7 +238,6 @@ def validate_environment():
     # Validate Blogger API credentials
     if not BLOGGER_BLOG_ID:
         errors.append("BLOGGER_BLOG_ID not set. Cannot post to Blogger.")
-    # Service Account specific credential validation code hata diya gaya hai
 
     try:
         import PIL
@@ -253,7 +249,7 @@ def validate_environment():
         import google_auth_oauthlib.flow
         import google.oauth2.credentials
     except ImportError as e:
-        errors.append(f"Missing required package: {e}. Please run 'pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib markdown2'.")
+        errors.append(f"Missing required package: {e}. Please run 'pip install python-dotenv requests Pillow google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib'.")
 
     if errors:
         for error in errors:
@@ -807,22 +803,22 @@ def perform_research_agent(target_topic, competitors):
         f"Analyze content from top competitors (e.g., {', '.join(competitors[:5])}) to identify relevant SEO keywords, content gaps, and structural insights.\n\n"
         f"**Crucial:** Based on the topic, original source information, and keyword research, generate a **unique, catchy, and SEO-optimized blog post title (H1)** that will attract readers and rank well. This title should be distinct from the original source titles and reflect a consolidated, in-depth perspective.\n\n"
         "## Process Flow:\n"
-        "1.  **Initial Keyword Discovery:** Identify primary (high search volume, high relevance) and secondary (long-tail) keyword clusters related to the target topic.\n"
+        "1.  **Initial Keyword Discovery:** Identify primary (high search volume, high relevance), secondary (long-tail, specific), and diverse keyword clusters related to the target topic. Think about various user intents (informational, commercial, navigational).\n"
         "2.  **Competitive Analysis:** Provide 2-3 key insights into competitor strategies and content gaps in relation to the topic.\n"
-        "3.  **Keyword Evaluation:** Assess search volume and competition levels for identified keywords. Prioritize high-value, relevant keywords for SEO optimization.\n"
+        "3.  **Keyword Evaluation:** Assess search volume and competition levels for identified keywords. Prioritize high-value, relevant keywords for SEO optimization. Identify important related entities and concepts.\n"
         "4.  **Outline Creation:** Generate a detailed, hierarchical blog post outline (using markdown headings `##`, `###`) that strategically incorporates the high-value keywords. Ensure the outline flows logically and covers comprehensive aspects of the topic. Suggest potential sub-sections for FAQs, case studies, or data points where appropriate.\n\n"
         "## Output Specifications:\n"
         "Generate a JSON object (as a string) with the following structure. Ensure the `blog_outline` is a valid markdown string.\n"
         "```json\n"
         "{{\n"
-        "  \"suggested_blog_title\": \"Your Unique and Catchy Blog Post Title Here\",\n" # New field
+        "  \"suggested_blog_title\": \"Your Unique and Catchy Blog Post Title Here\",\n"
         "  \"primary_keywords\": [\"keyword1\", \"keyword2\", \"keyword3\"],\n"
         "  \"secondary_keywords\": {{\"sub_topic1\": [\"keywordA\", \"keywordB\"], \"sub_topic2\": [\"keywordC\", \"keywordD\"]}},\n"
         "  \"competitor_insights\": \"Summary of competitor strategies and content gaps.\",\n"
         "  \"blog_outline\": \"## Introduction\\n\\n### Hook\\n\\n## Main Section 1: [Section Title]\\n\\n### Sub-section 1.1\\n\\n## Conclusion\\n\"\n"
         "}}\n"
         "```\n"
-        "**Constraints:** Focus on commercially relevant terms. Exclude branded competitor terms. The entire output must be a single, valid JSON string. The `blog_outline` must contain at least 8 distinct markdown headings (H2 or H3). The `suggested_blog_title` should be concise, impactful, and ideally under 70 characters. Do NOT include any introductory or concluding remarks outside the JSON block."
+        "**Constraints:** Focus on commercially relevant terms. Exclude branded competitor terms. The entire output must be a single, valid JSON string. The `blog_outline` must contain at least 8 distinct markdown headings (H2 or H3) and be structured for user engagement and SEO. The `suggested_blog_title` should be concise, impactful, and ideally under 70 characters. Do NOT include any introductory or concluding remarks outside the JSON block."
     )
     try:
         logger.info(f"Generating research for: '{target_topic[:70]}...'")
@@ -899,25 +895,25 @@ def generate_content_agent(consolidated_article_data, research_output, transform
         f"into comprehensive, publication-ready, SEO-optimized blog posts. You excel at creating in-depth, "
         f"authoritative content by synthesizing information from multiple sources, while maintaining reader engagement and SEO best practices.\n\n"
         f"## Input Requirements:\n"
-        f"1.  `aggregated_source_data`: {json.dumps(consolidated_article_data_for_prompt, indent=2)}\n" # Use truncated data
+        f"1.  `aggregated_source_data`: {json.dumps(consolidated_article_data_for_prompt, indent=2)}\n"
         f"2.  `research_output`: {json.dumps(research_output, indent=2)}\n"
         f"3.  `transformed_image_path_info`: '{image_path_for_prompt}' (This is the file path to the main featured image. Do NOT embed this image again within the content body. It will be handled separately in the HTML template.)\n\n"
         f"## Content Specifications:\n"
         f"-   **Word Count:** Aim for 2500-3000 words. Synthesize and expand thoughtfully on the `aggregated_source_data['combined_content']`, adding depth, specific (even if fabricated) details, and related information from your training data. Do NOT simply copy-paste content from the input. Rewrite and integrate.\n"
         f"-   **Heading Structure:** Use the provided outline (`research_output['blog_outline']`). Ensure a minimum of 25 headings (`##` and `###` only, except for the main H1 title).\n"
         f"-   **Paragraph Length:** Each paragraph should contain at least 5 sentences for comprehensive coverage, unless it's a short intro/outro or a bullet point explanation.\n"
-        f"-   **Writing Style:** Professional yet conversational, engaging, and human-like. Avoid jargon where simpler terms suffice. Do NOT mention that you are an AI or generated the content.\n"
+        f"-   **Writing Style:** Professional yet conversational, engaging, and human-like. Avoid jargon where simpler terms suffice. Do NOT mention that you are an AI or generated the content. Ensure a clear, authoritative, and trustworthy tone that positions the content as highly credible.\n"
         f"-   **Target Audience:** Broad audience interested in the specified category.\n"
         f"-   **Keyword Integration:** Naturally weave `primary_keywords` ({primary_keywords_str}) and `secondary_keywords` ({secondary_keywords_str}) throughout the text without keyword stuffing. Integrate them into headings, subheadings, and body paragraphs.\n"
         f"-   **Content Expansion:** Elaborate significantly on the `aggregated_source_data['combined_content']` by adding specific details, explanations, and context, drawing from your extensive knowledge base. Emphasize synthesizing information from *all provided sources* to create a unique and comprehensive article.\n"
-        f"-   **Data & Examples:** Incorporate relevant data, statistics, and real-world examples (even if not in original article, create plausible ones). Invent realistic numbers, dates, names, and organizations where appropriate to enhance credibility. Ensure these details *support* the main points derived from the aggregated content.\n"
-        f"-   **Linking:** Generate relevant external links where appropriate (e.g., `[Source Name](https://www.reputable-source.com/article-about-topic)`). **Crucially, ensure these are actual, plausible URLs from reputable domains related to the topic (e.g., 'nytimes.com/tech-news', 'theverge.com/reviews', 'medicaljournals.org/research', 'forbes.com/business-insights', 'espn.com/sports-analysis'). Invent these URLs realistically and embed them naturally within the surrounding sentences. Do NOT use the `@` symbol or any other prefix before links or raw URLs. Do NOT include `example.com` or similar placeholder domains.**\n"
-        f"-   **Image Inclusion:** Do NOT include any markdown `![alt text](image_path)` syntax for the featured image within the generated content body. The featured image is handled separately.\n"
+        f"-   **Data & Examples:** Incorporate relevant data, statistics, and real-world examples (even if not in original article, create plausible ones). Invent realistic numbers, dates, names, and organizations where appropriate to enhance credibility. Ensure these details *support* the main points derived from the aggregated content. When inventing details or examples, ensure they are realistic and enhance the article's depth and plausibility.\n"
+        f"-   **Linking:** Generate relevant external links where appropriate (e.g., `[Source Name](https://www.reputable-source.com/article-about-topic)`). **Crucially, ensure these are actual, plausible URLs from reputable domains related to the topic (e.g., 'nytimes.com/tech-news', 'theverge.com/reviews', 'medicaljournals.org/research', 'forbes.com/business-insights', 'espn.com/sports-analysis'). Invent these URLs realistically and embed them naturally within the surrounding sentences. Do NOT use the `@` symbol or any other prefix before links or raw URLs. Do NOT include `example.com` or similar placeholder domains.** Also, generate **2-3 contextually relevant internal links** within the content, pointing to hypothetical related blog posts on your own blog (e.g., `[Benefits of Cloud Adoption](https://yourblog.blogspot.com/2024/05/cloud-adoption-benefits.html)`, `[Latest Trends in Renewable Energy](https://yourblog.blogspot.com/2024/05/renewable-energy-trends.html)`). These internal links should be naturally embedded within sentences and promote exploration of related content on your site.\n"
+        f"-   **Image Inclusion:** Do NOT include any markdown `![alt text](image_path)` syntax for the featured image within the generated content body. The featured image is handled separately. Crucially, do NOT generate any `![alt text](image_path)` markdown for additional images within the content body. The single `featuredImage` is handled separately by the HTML template and should not be re-included.\n"
         f"## Output Structure:\n"
         f"Generate the complete blog post in markdown format. It must start with a metadata block followed by the blog content.\n\n"
         f"**Metadata Block (exact key-value pairs, no --- delimiters, newline separated):**\n"
-        f"title: {new_blog_title}\n" # Use the new, AI-generated title
-        f"description: {blog_description_for_prompt}\n" # Use the pre-processed variable here
+        f"title: {new_blog_title}\n"
+        f"description: {blog_description_for_prompt}\n"
         f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
         f"categories: [{consolidated_article_data.get('category', 'general')}, {', '.join(research_output.get('primary_keywords', [])[:2])}]\n"
         f"tags: [{', '.join(research_output.get('primary_keywords', []) + research_output.get('secondary_keywords', {}).get(list(research_output.get('secondary_keywords', {}).keys())[0], []) if research_output.get('secondary_keywords') else research_output.get('primary_keywords', []))}]\n"
@@ -1090,7 +1086,7 @@ def markdown_to_html(markdown_text, main_featured_image_filepath=None, main_feat
         else:
             # For other images (e.g., external ones generated by LLM), keep the original URL
             # Ensure the alt text is escaped to prevent breaking HTML attributes
-            escaped_alt_text = alt_text.replace('"', '&quot;') # Use &quot; for attribute safety
+            escaped_alt_text = alt_text.replace('"', '"') # Use " for attribute safety
             return f'<img src="{src_url}" alt="{escaped_alt_text}" class="in-content-image">'
 
     html_text = re.sub(r'!\[(.*?)\]\((.*?)\)', image_replacer, html_text)
@@ -1148,8 +1144,8 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
     """Generate enhanced HTML template with better styling and comprehensive SEO elements."""
 
     # Escape special characters for HTML attributes (e.g., in meta tags, alt text)
-    escaped_title_html = title.replace('"', '&quot;').replace("'", '&#39;')
-    escaped_description_html = description.replace('"', '&quot;').replace("'", '&#39;')
+    escaped_title_html = title.replace('"', '"').replace("'", ''')
+    escaped_description_html = description.replace('"', '"').replace("'", ''')
 
     # Use json.dumps to get correctly escaped strings for JSON values.
     # We then slice [1:-1] to remove the outer quotes added by json.dumps,
@@ -1381,7 +1377,6 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
 </html>"""
 
 # --- MODIFIED post_to_blogger function (to accept UserCredentials) ---
-# Service Account specific credential string parameter hata diya gaya hai
 def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
     """
     Posts a generated HTML blog to Blogger.
@@ -1461,7 +1456,7 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
 
     # Safe fallback for description, ensuring it's not too long and doesn't contain quotes
     description_fallback = f"A comprehensive look at the latest news in {category} related to '{title}'."
-    description = metadata.get('description', description_fallback).replace('"', '&quot;').replace("'", '&#39;')[:155] # Max 155 chars recommended and HTML escape quotes
+    description = metadata.get('description', description_fallback).replace('"', '"').replace("'", ''')[:155] # Max 155 chars recommended and HTML escape quotes
 
     # Ensure keywords are comma-separated and clean
     keywords_from_meta = metadata.get('tags', '').replace(', ', ',').replace(' ', '_')
@@ -1473,9 +1468,20 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
     # Use the Base64 URI for the main image in the HTML body
     image_src_for_html_body = transformed_image_b64 if transformed_image_b64 else ''
 
-    # Use the file path for structured data and OG tags (recommended for SEO)
-    # Ensure it's a relative path if needed, or handle as full URL in a live environment
-    image_url_for_seo = transformed_image_filepath if transformed_image_filepath and transformed_image_filepath != 'None' else ''
+    # Use the file path for structured data and OG tags (recommended for SEO).
+    # NOTE: For public blogs, this should ideally be a publicly accessible URL,
+    # not a local file path. If you upload to Blogger, retrieve that public URL.
+    # For now, it will be the local path which will not work for external crawlers,
+    # or an empty string if no image is present.
+    image_url_for_seo = image_src_for_html_body # Fallback to base64 for SEO metadata if no public URL available
+    if transformed_image_filepath and transformed_image_filepath != 'None':
+         # If you had a mechanism to upload to Blogger's image hosting and get a URL,
+         # you would replace this with the *public URL*. For this script, it's a local file.
+         # An alternative is to use the Base64 URI here, though less ideal for crawlers.
+         image_url_for_seo = '' # Set to empty to avoid local paths in public SEO fields
+         logger.warning("For optimal SEO, 'image_url_for_seo' should be a publicly accessible URL. Currently it is left blank as the script doesn't upload images to a public host.")
+         logger.warning("You may need to manually update the og:image, twitter:image, and JSON-LD image URL in Blogger after publishing.")
+
 
     published_date = metadata.get('date', datetime.now().strftime('%Y-%m-%d'))
 
@@ -1497,7 +1503,7 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
     final_html_output = generate_enhanced_html_template(
         title, description, keywords, image_url_for_seo,
         image_src_for_html_body, html_blog_content,
-        category, primary_source_url, published_date # Pass primary_source_url
+        category, primary_source_url, published_date
     )
 
     with open(file_path, "w", encoding="utf-8") as f:
@@ -1606,7 +1612,7 @@ def main():
                 logger.warning("GEMINI_API_KEY is not set. Skipping AI content generation. Only image processing and basic HTML saving will occur (if possible).")
                 generated_blog_markdown = (
                     f"title: {consolidated_topic}\n"
-                    f"description: {consolidated_description.replace('\"', '&quot;').replace('\\n', ' ').strip()[:155]}\n"
+                    f"description: {consolidated_description.replace('\"', '"').replace('\\n', ' ').strip()[:155]}\n"
                     f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
                     f"categories: [{category}]\n"
                     f"tags: [{category}, news]\n"
@@ -1629,12 +1635,11 @@ def main():
             )
 
             # --- Step 4: Post to Blogger ---
-            # blogger_oauth_credentials ab UserCredentials object hai, service account string nahi
             if saved_html_file_path and blogger_oauth_credentials and BLOGGER_BLOG_ID:
                 post_to_blogger(
                     saved_html_file_path,
                     BLOGGER_BLOG_ID,
-                    blogger_oauth_credentials # Yahan credentials object pass kar rahe hain
+                    blogger_oauth_credentials
                 )
             else:
                 logger.warning("Skipping Blogger post due to missing HTML file or Blogger credentials/ID.")
@@ -1642,7 +1647,7 @@ def main():
         except Exception as e:
             logger.critical(f"An unexpected error occurred during blog generation workflow for '{consolidated_topic}': {e}", exc_info=True)
         finally:
-            time.sleep(30)
+            time.sleep(30) # Delay between categories to avoid hitting API rate limits too quickly
 
 if __name__ == '__main__':
     main()
