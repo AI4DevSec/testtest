@@ -1611,9 +1611,10 @@ def main():
                     continue
             else:
                 logger.warning("GEMINI_API_KEY is not set. Skipping AI content generation. Only image processing and basic HTML saving will occur (if possible).")
+                # Adjusted for proper escaping for placeholder description
                 generated_blog_markdown = (
                     f"title: {consolidated_topic}\n"
-                    f"description: {consolidated_description.replace('\"', '"').replace('\\n', ' ').strip()[:155]}\n" # Adjusted for proper escaping
+                    f"description: {consolidated_description.replace('\"', '"').replace('\\n', ' ').strip()[:155].replace("'", ''')}\n"
                     f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
                     f"categories: [{category}]\n"
                     f"tags: [{category}, news]\n"
