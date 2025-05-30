@@ -39,7 +39,7 @@ jobs:
         # Uncomment aur set karo agar branding logo file repository mein hai:
         # BRANDING_LOGO_PATH: 'my_logo.png'
       run: |
-        python main.py # Apni script ko chalao
+        python hindi.py # Apni script ko chalao
 
     # Yeh step generated files ko upload karta hai taaki tum unhe download kar sako.
     - name: Upload Generated Blogs and Images
