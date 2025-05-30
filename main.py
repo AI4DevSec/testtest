@@ -872,6 +872,21 @@ def generate_content_agent(consolidated_article_data, research_output, transform
     logger.info(f"Using primary keywords for content generation: {primary_keywords_str}")
     logger.info(f"Using secondary keywords for content generation: {secondary_keywords_str}")
 
+    # Prepare metadata for logging
+    category = consolidated_article_data.get('category', 'general')
+    primary_keywords = research_output.get('primary_keywords', [])
+    secondary_keywords = []
+    if research_output.get('secondary_keywords'):
+        for sub_list in research_output.get('secondary_keywords', {}).values():
+            secondary_keywords.extend(sub_list)
+    
+    # Log the metadata that will be included
+    logger.info("Preparing metadata for blog post:")
+    logger.info(f"Title: {new_blog_title}")
+    logger.info(f"Category: {category}")
+    logger.info(f"Primary Keywords: {primary_keywords}")
+    logger.info(f"Secondary Keywords: {secondary_keywords}")
+
     # TRUNCATE combined_content to avoid hitting context limits
     combined_content_for_prompt = consolidated_article_data.get('combined_content', '')
     if len(combined_content_for_prompt) > 4000:
@@ -915,8 +930,8 @@ def generate_content_agent(consolidated_article_data, research_output, transform
         f"title: {new_blog_title}\n"
         f"description: {blog_description_for_prompt}\n"
         f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
-        f"categories: [{consolidated_article_data.get('category', 'general')}, {', '.join(research_output.get('primary_keywords', [])[:2])}]\n"
-        f"tags: [{', '.join(research_output.get('primary_keywords', []) + research_output.get('secondary_keywords', {}).get(list(research_output.get('secondary_keywords', {}).keys())[0], []) if research_output.get('secondary_keywords') else research_output.get('primary_keywords', []))}]\n"
+        f"categories: [{category}, {', '.join(primary_keywords[:2])}]\n"
+        f"tags: [{', '.join(primary_keywords + secondary_keywords[:5])}]\n"
         f"featuredImage: {transformed_image_filepath if transformed_image_filepath else 'None'}\n\n"
         f"**Blog Content (following the metadata block):**\n"
         f"1.  **Main Title (H1):** Start with an H1 heading based on the provided `suggested_blog_title`. Example: `# {new_blog_title}`.\n"
@@ -936,6 +951,21 @@ def generate_content_agent(consolidated_article_data, research_output, transform
         # Log the raw markdown from the AI
         logger.info(f"--- Raw AI-generated Markdown Content (first 500 chars): ---\n{content[:500]}\n--- End Raw AI Markdown ---")
         logger.info(f"Full raw AI-generated Markdown content length: {len(content)} characters.")
+
+        # Verify metadata block is present
+        if not re.search(r"title:\s*.*\n.*?tags:\s*\[.*\]", content, re.DOTALL):
+            logger.warning("Generated content appears to be missing the required metadata block!")
+            # Add metadata block if missing
+            content = (
+                f"title: {new_blog_title}\n"
+                f"description: {blog_description_for_prompt}\n"
+                f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
+                f"categories: [{category}, {', '.join(primary_keywords[:2])}]\n"
+                f"tags: [{', '.join(primary_keywords + secondary_keywords[:5])}]\n"
+                f"featuredImage: {transformed_image_filepath if transformed_image_filepath else 'None'}\n\n"
+                f"{content}"
+            )
+            logger.info("Added missing metadata block to content")
 
         content = clean_ai_artifacts(content)
 
@@ -1404,6 +1434,10 @@ def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
         with open(html_file_path, 'r', encoding='utf-8') as f:
             full_html_content = f.read()
 
+        # Enhanced metadata parsing with more detailed logging
+        logger.info("Starting metadata parsing from HTML file...")
+        
+        # First try to find metadata in the HTML content
         metadata_match = re.search(r"title:\s*(.*?)\n.*?tags:\s*\[(.*?)\]", full_html_content, re.DOTALL | re.IGNORECASE)
         post_title = "Generated Blog Post"
         post_labels = [] # Initialize here
@@ -1413,7 +1447,9 @@ def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
             tags_str = metadata_match.group(2).strip()
             # Parse tags from the string [tag1, tag2]
             post_labels = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
-            logger.info(f"Parsed 'tags' from markdown metadata: {post_labels}")
+            logger.info(f"Found metadata in HTML content:")
+            logger.info(f"Title: {post_title}")
+            logger.info(f"Tags: {post_labels}")
             
             # Also grab categories if you want them as labels
             categories_match = re.search(r"categories:\s*\[(.*?)\]", full_html_content, re.DOTALL | re.IGNORECASE)
@@ -1421,17 +1457,28 @@ def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
                 categories_str = categories_match.group(1).strip()
                 parsed_categories = [cat.strip() for cat in categories_str.split(',') if cat.strip()]
                 post_labels.extend(parsed_categories)
-                logger.info(f"Parsed 'categories' from markdown metadata: {parsed_categories}. Combined labels: {post_labels}")
-
+                logger.info(f"Categories found: {parsed_categories}")
+                logger.info(f"Combined labels after adding categories: {post_labels}")
         else:
+            logger.warning("Could not find metadata block in HTML content. Attempting to extract from H1...")
             h1_match = re.search(r'<h1>(.*?)</h1>', full_html_content, re.IGNORECASE | re.DOTALL)
             if h1_match:
                 post_title = h1_match.group(1).strip()
-            logger.warning(f"Could not parse comprehensive metadata (title/tags/categories) from {html_file_path}. Using fallback title/tags.")
+                logger.info(f"Extracted title from H1: {post_title}")
+            else:
+                logger.warning("Could not find H1 tag either. Using default title.")
 
-        # Ensure unique labels
-        post_labels = list(set(post_labels))
-        logger.info(f"Final labels to send to Blogger: {post_labels}")
+        # Ensure unique labels and clean them
+        post_labels = list(set([label.strip().lower() for label in post_labels if label.strip()]))
+        logger.info(f"Final cleaned labels to send to Blogger: {post_labels}")
+
+        # If no labels were found, add some default ones based on the title
+        if not post_labels:
+            logger.warning("No labels found in metadata. Adding default labels based on title...")
+            # Extract words from title and use them as labels
+            default_labels = [word.lower() for word in re.findall(r'\w+', post_title) if len(word) > 3]
+            post_labels.extend(default_labels[:5])  # Add up to 5 words from title
+            logger.info(f"Added default labels: {post_labels}")
 
         post_body = {
             'kind': 'blogger#post',
@@ -1441,16 +1488,27 @@ def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
             'labels': post_labels,
             'status': 'LIVE'
         }
-        logger.info(f"Blogger Post Body (labels part): {post_body.get('labels')}")
+        logger.info(f"Preparing Blogger post with:")
+        logger.info(f"Title: {post_title}")
+        logger.info(f"Labels: {post_labels}")
+        logger.info(f"Content length: {len(full_html_content)} characters")
 
-        logger.info(f"Attempting to insert blog post to Blogger: '{post_title}' with labels: {post_body.get('labels')}...")
+        logger.info(f"Attempting to insert blog post to Blogger: '{post_title}' with labels: {post_labels}...")
         request = blogger_service.posts().insert(blogId=blog_id, body=post_body)
         response = request.execute()
 
         logger.info(f"✅ Successfully posted '{post_title}' to Blogger! Post ID: {response.get('id')}")
         logger.info(f"View live at: {response.get('url')}")
         # Look for the 'labels' key in the API response
-        logger.info(f"Blogger API Response labels: {response.get('labels')}")
+        response_labels = response.get('labels', [])
+        logger.info(f"Blogger API Response labels: {response_labels}")
+        
+        # Verify if labels were actually set
+        if not response_labels:
+            logger.warning("No labels found in Blogger API response. Labels may not have been set correctly.")
+        elif set(response_labels) != set(post_labels):
+            logger.warning(f"Labels mismatch! Sent: {post_labels}, Received: {response_labels}")
+        
         return True
 
     except HttpError as e:
