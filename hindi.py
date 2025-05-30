@@ -89,18 +89,22 @@ FONT_PATHS = {
         "/System/Library/Fonts/Arial.ttf",
         "/Library/Fonts/Arial.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/SFProText-Regular.ttf"
+        "/System/Library/Fonts/SFProText-Regular.ttf",
+        "/Library/Fonts/NotoSansDevanagari-Regular.ttf"  # Add this line if you have the font
     ],
     'windows': [
         "C:/Windows/Fonts/arial.ttf",
         "C:/Windows/Fonts/calibri.ttf",
-        "C:/Windows/Fonts/segoeui.ttf"
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/Mangal.ttf"  # Add this line for Hindi support
     ],
     'linux': [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/TTF/arial.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",  # Add this line
+        "/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf"  # Add this line
     ]
 }
 
