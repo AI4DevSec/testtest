@@ -109,15 +109,34 @@ FONT_PATHS = {
 }
 
 def find_system_font():
-    """Find the best available font for the current system"""
+    """Find the best available font for the current system, prioritizing Devanagari for Hindi."""
     system = platform.system().lower()
+    font_list = []
 
-    if 'darwin' in system:
-        font_list = FONT_PATHS['mac']
-    elif 'windows' in system:
-        font_list = FONT_PATHS['windows']
-    else: # Assume Linux/Unix-like
-        font_list = FONT_PATHS['linux']
+    # Prioritize Devanagari font if language is Hindi
+    if LANGUAGE == 'hi':
+        # Add Devanagari fonts first
+        if 'darwin' in system:
+            font_list = [
+                "/Library/Fonts/NotoSansDevanagari-Regular.ttf",
+                "/System/Library/Fonts/Supplemental/Mangal.ttf"
+            ] + FONT_PATHS['mac']
+        elif 'windows' in system:
+            font_list = [
+                "C:/Windows/Fonts/Mangal.ttf"
+            ] + FONT_PATHS['windows']
+        else:  # Linux/Unix
+            font_list = [
+                "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+                "/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf"
+            ] + FONT_PATHS['linux']
+    else:
+        if 'darwin' in system:
+            font_list = FONT_PATHS['mac']
+        elif 'windows' in system:
+            font_list = FONT_PATHS['windows']
+        else:
+            font_list = FONT_PATHS['linux']
 
     for font_path in font_list:
         if os.path.exists(font_path):
