@@ -854,9 +854,6 @@ def generate_content_agent(consolidated_article_data, research_output, transform
     """
     Acts as the 'Content Generator Agent'. Uses Gemini to write the blog post
     based on aggregated source data and research output.
-    `transformed_image_filepath` is the *local file path* to the processed image.
-    The agent will use this path in its markdown output, which will then be
-    replaced by the Base64 URI during HTML conversion.
     """
     if not CONTENT_MODEL:
         logger.error("Content model not initialized. Skipping content generation.")
@@ -871,8 +868,11 @@ def generate_content_agent(consolidated_article_data, research_output, transform
     # Get the new suggested title
     new_blog_title = research_output.get('suggested_blog_title', consolidated_article_data.get('consolidated_topic', 'Default Consolidated Blog Title'))
 
-    # TRUNCATE combined_content to avoid hitting context limits, especially if it's very long
-    # A length of 2000-4000 characters is usually sufficient for context.
+    # Log the keywords being used
+    logger.info(f"Using primary keywords for content generation: {primary_keywords_str}")
+    logger.info(f"Using secondary keywords for content generation: {secondary_keywords_str}")
+
+    # TRUNCATE combined_content to avoid hitting context limits
     combined_content_for_prompt = consolidated_article_data.get('combined_content', '')
     if len(combined_content_for_prompt) > 4000:
         combined_content_for_prompt = combined_content_for_prompt[:4000] + "\n\n[...Content truncated for prompt brevity...]"
@@ -889,59 +889,24 @@ def generate_content_agent(consolidated_article_data, research_output, transform
     )
     blog_description_for_prompt = raw_description_for_prompt.replace('"', '').replace('\n', ' ').replace('\r', ' ').strip()[:155]
 
-
-    prompt = (
-        f"You are a specialized Blog Writing Agent that transforms SEO research and aggregated article data "
-        f"into comprehensive, publication-ready, SEO-optimized blog posts. You excel at creating in-depth, "
-        f"authoritative content by synthesizing information from multiple sources, while maintaining reader engagement and SEO best practices.\n\n"
-        f"## Input Requirements:\n"
-        f"1.  `aggregated_source_data`: {json.dumps(consolidated_article_data_for_prompt, indent=2)}\n"
-        f"2.  `research_output`: {json.dumps(research_output, indent=2)}\n"
-        f"3.  `transformed_image_path_info`: '{image_path_for_prompt}' (This is the file path to the main featured image. Do NOT embed this image again within the content body. It will be handled separately in the HTML template.)\n\n"
-        f"## Content Specifications:\n"
-        f"-   **Word Count:** Aim for 2500-3000 words. Synthesize and expand thoughtfully on the `aggregated_source_data['combined_content']`, adding depth, specific (even if fabricated) details, and related information from your training data. Do NOT simply copy-paste content from the input. Rewrite and integrate.\n"
-        f"-   **Heading Structure:** Use the provided outline (`research_output['blog_outline']`). Ensure a minimum of 25 headings (`##` and `###` only, except for the main H1 title).\n"
-        f"-   **Paragraph Length:** Each paragraph should contain at least 5 sentences for comprehensive coverage, unless it's a short intro/outro or a bullet point explanation.\n"
-        f"-   **Writing Style:** Professional yet conversational, engaging, and human-like. Avoid jargon where simpler terms suffice. Do NOT mention that you are an AI or generated the content. Ensure a clear, authoritative, and trustworthy tone that positions the content as highly credible.\n"
-        f"-   **Target Audience:** Broad audience interested in the specified category.\n"
-        f"-   **Keyword Integration:** Naturally weave `primary_keywords` ({primary_keywords_str}) and `secondary_keywords` ({secondary_keywords_str}) throughout the text without keyword stuffing. Integrate them into headings, subheadings, and body paragraphs.\n"
-        f"-   **Content Expansion:** Elaborate significantly on the `aggregated_source_data['combined_content']` by adding specific details, explanations, and context, drawing from your extensive knowledge base. Emphasize synthesizing information from *all provided sources* to create a unique and comprehensive article.\n"
-        f"-   **Data & Examples:** Incorporate relevant data, statistics, and real-world examples (even if not in original article, create plausible ones). Invent realistic numbers, dates, names, and organizations where appropriate to enhance credibility. Ensure these details *support* the main points derived from the aggregated content. When inventing details or examples, ensure they are realistic and enhance the article's depth and plausibility.\n"
-        f"-   **Linking:** Generate relevant external links where appropriate (e.g., `[Source Name](https://www.reputable-source.com/article-about-topic)`). **Crucially, ensure these are actual, plausible URLs from reputable domains related to the topic (e.g., 'nytimes.com/tech-news', 'theverge.com/reviews', 'medicaljournals.org/research', 'forbes.com/business-insights', 'espn.com/sports-analysis'). Invent these URLs realistically and embed them naturally within the surrounding sentences. Do NOT use the `@` symbol or any other prefix before links or raw URLs. Do NOT include `example.com` or similar placeholder domains.** Also, generate **2-3 contextually relevant internal links** within the content, pointing to hypothetical related blog posts on your own blog (e.g., `[Benefits of Cloud Adoption](https://yourblog.blogspot.com/2024/05/cloud-adoption-benefits.html)`, `[Latest Trends in Renewable Energy](https://yourblog.blogspot.com/2024/05/renewable-energy-trends.html)`). These internal links should be naturally embedded within sentences and promote exploration of related content on your site.\n"
-        f"-   **Image Inclusion:** Do NOT include any markdown `![alt text](image_path)` syntax for the featured image within the generated content body. The featured image is handled separately. Crucially, do NOT generate any `![alt text](image_path)` markdown for additional images within the content body. The single `featuredImage` is handled separately by the HTML template and should not be re-included.\n"
-        f"## Output Structure:\n"
-        f"Generate the complete blog post in markdown format. It must start with a metadata block followed by the blog content.\n\n"
-        f"**Metadata Block (exact key-value pairs, no --- delimiters, newline separated):**\n"
-        f"title: {new_blog_title}\n"
-        f"description: {blog_description_for_prompt}\n"
-        f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
-        f"categories: [{consolidated_article_data.get('category', 'general')}, {', '.join(research_output.get('primary_keywords', [])[:2])}]\n"
-        f"tags: [{', '.join(research_output.get('primary_keywords', []) + research_output.get('secondary_keywords', {}).get(list(research_output.get('secondary_keywords', {}).keys())[0], []) if research_output.get('secondary_keywords') else research_output.get('primary_keywords', []))}]\n"
-        f"featuredImage: {transformed_image_filepath if transformed_image_filepath else 'None'}\n\n"
-        f"**Blog Content (following the metadata block):**\n"
-        f"1.  **Main Title (H1):** Start with an H1 heading based on the provided `suggested_blog_title`. Example: `# {new_blog_title}`.\n"
-        f"2.  **Introduction (2-3 paragraphs):** Hook the reader. Clearly state the problem or topic and your blog's value proposition.\n"
-        f"3.  **Main Sections:** Follow the `blog_outline` from `research_output`. Expand each section (`##`) and sub-section (`###`). Ensure each section provides substantial information.\n"
-        f"4.  **FAQ Section:** Include 5-7 frequently asked questions with detailed, comprehensive answers, related to the topic and incorporating keywords.\n"
-        f"5.  **Conclusion:** Summarize key takeaways, provide a forward-looking statement, and a clear call-to-action.\n"
-        f"Do NOT include any introductory or concluding remarks outside the blog content itself (e.g., 'Here is your blog post'). **Do NOT include any bracketed instructions (like `[mention this]`), placeholders (like `example.com`), or any comments intended for me within the output markdown. The entire output must be polished, final content, ready for publication.**"
-    )
     try:
         logger.info(f"Generating full blog content for: '{new_blog_title[:70]}...'")
-        # Use the helper function here
         response = _gemini_generate_content_with_retry(CONTENT_MODEL, prompt)
 
         content = response.text.strip()
 
-        # Clean up any remaining AI artifacts before returning
+        # Log the raw markdown from the AI
+        logger.info(f"--- Raw AI-generated Markdown Content (first 500 chars): ---\n{content[:500]}\n--- End Raw AI Markdown ---")
+        logger.info(f"Full raw AI-generated Markdown content length: {len(content)} characters.")
+
         content = clean_ai_artifacts(content)
+
+        # Log the cleaned markdown
+        logger.info(f"--- Cleaned AI-generated Markdown Content (first 500 chars): ---\n{content[:500]}\n--- End Cleaned AI Markdown ---")
 
         logger.info("Content generation successful.")
         return content
 
-    except (ValueError, requests.exceptions.RequestException, exceptions.InternalServerError, exceptions.ResourceExhausted, exceptions.DeadlineExceeded) as e:
-        logger.error(f"Content Agent generation failed or content validation failed for '{new_blog_title}': {e}.")
-        return None
     except Exception as e:
         logger.error(f"Content Agent generation failed for '{new_blog_title}': {e}", exc_info=True)
         return None
@@ -999,24 +964,28 @@ def parse_markdown_metadata(markdown_content):
     lines = markdown_content.split('\n')
     content_start_index = 0
 
+    logger.debug("Starting metadata parsing...")
     for i, line in enumerate(lines):
         stripped_line = line.strip()
         if not stripped_line: # Found a blank line, metadata block ends here
             content_start_index = i + 1
+            logger.debug(f"Blank line found, metadata ends at line {i}. Content starts at {content_start_index}.")
             break
         if ':' in stripped_line: # It's a metadata line
             key, value = stripped_line.split(':', 1)
             metadata[key.strip()] = value.strip()
-        else: # Not a metadata line and not blank, so metadata ended
+            logger.debug(f"Parsed metadata line: {key.strip()}: {value.strip()}")
+        else: # Not a metadata line and not blank, so metadata ended unexpectedly
             content_start_index = i
+            logger.warning(f"Metadata block ended unexpectedly at line {i} with: '{stripped_line}'")
             break
-    else: # If loop finishes without breaking, entire content might be metadata or empty
+    else:
         content_start_index = len(lines)
+        logger.debug("No blank line found, assuming all content is metadata or empty after checking.")
 
     blog_content_only = '\n'.join(lines[content_start_index:]).strip()
 
     # The H1 title is usually the first heading in the content body.
-    # We remove it from the content here, as it's added separately in the HTML template.
     if blog_content_only.startswith('# '):
         h1_line_end = blog_content_only.find('\n')
         if h1_line_end != -1:
@@ -1024,11 +993,16 @@ def parse_markdown_metadata(markdown_content):
             if 'title' not in metadata: # Prioritize already parsed metadata title
                 metadata['title'] = h1_title
             blog_content_only = blog_content_only[h1_line_end:].strip()
+            logger.debug(f"Extracted H1 title: '{h1_title}'. Remaining content starts after H1.")
         else: # H1 is the only line
             h1_title = blog_content_only[2:].strip()
             if 'title' not in metadata:
                 metadata['title'] = h1_title
             blog_content_only = "" # Content is just the H1
+            logger.debug(f"Extracted H1 title (only line): '{h1_title}'. Content became empty.")
+
+    logger.info(f"Final parsed metadata: {metadata}")
+    logger.info(f"Blog content starts with: {blog_content_only[:100]}...") # Log beginning of content
 
     return metadata, blog_content_only
 
@@ -1380,16 +1354,12 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
 def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
     """
     Posts a generated HTML blog to Blogger.
-    :param html_file_path: Path to the local HTML file to be posted.
-    :param blog_id: The ID of the Blogger blog.
-    :param blogger_user_credentials: The UserCredentials object obtained from OAuth flow.
     """
     if not blogger_user_credentials or not blogger_user_credentials.valid:
         logger.error("Blogger User Credentials are not valid. Cannot post to Blogger.")
         return False
 
     try:
-        # UserCredentials object ko directly use karo
         blogger_service = build('blogger', 'v3', credentials=blogger_user_credentials)
 
         # Read the HTML content and parse metadata
@@ -1398,17 +1368,32 @@ def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
 
         metadata_match = re.search(r"title:\s*(.*?)\n.*?tags:\s*\[(.*?)\]", full_html_content, re.DOTALL | re.IGNORECASE)
         post_title = "Generated Blog Post"
-        post_labels = []
+        post_labels = [] # Initialize here
 
         if metadata_match:
             post_title = metadata_match.group(1).strip()
             tags_str = metadata_match.group(2).strip()
+            # Parse tags from the string [tag1, tag2]
             post_labels = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+            logger.info(f"Parsed 'tags' from markdown metadata: {post_labels}")
+            
+            # Also grab categories if you want them as labels
+            categories_match = re.search(r"categories:\s*\[(.*?)\]", full_html_content, re.DOTALL | re.IGNORECASE)
+            if categories_match:
+                categories_str = categories_match.group(1).strip()
+                parsed_categories = [cat.strip() for cat in categories_str.split(',') if cat.strip()]
+                post_labels.extend(parsed_categories)
+                logger.info(f"Parsed 'categories' from markdown metadata: {parsed_categories}. Combined labels: {post_labels}")
+
         else:
             h1_match = re.search(r'<h1>(.*?)</h1>', full_html_content, re.IGNORECASE | re.DOTALL)
             if h1_match:
                 post_title = h1_match.group(1).strip()
-            logger.warning(f"Could not parse comprehensive metadata from {html_file_path}. Using fallback title/tags.")
+            logger.warning(f"Could not parse comprehensive metadata (title/tags/categories) from {html_file_path}. Using fallback title/tags.")
+
+        # Ensure unique labels
+        post_labels = list(set(post_labels))
+        logger.info(f"Final labels to send to Blogger: {post_labels}")
 
         post_body = {
             'kind': 'blogger#post',
@@ -1416,15 +1401,18 @@ def post_to_blogger(html_file_path, blog_id, blogger_user_credentials):
             'title': post_title,
             'content': full_html_content,
             'labels': post_labels,
-            'status': 'LIVE' # Set to 'DRAFT' for review, change to 'LIVE' to publish directly
+            'status': 'LIVE'
         }
+        logger.info(f"Blogger Post Body (labels part): {post_body.get('labels')}")
 
-        logger.info(f"Attempting to insert blog post to Blogger: '{post_title}'...")
+        logger.info(f"Attempting to insert blog post to Blogger: '{post_title}' with labels: {post_body.get('labels')}...")
         request = blogger_service.posts().insert(blogId=blog_id, body=post_body)
         response = request.execute()
 
         logger.info(f"✅ Successfully posted '{post_title}' to Blogger! Post ID: {response.get('id')}")
         logger.info(f"View live at: {response.get('url')}")
+        # Look for the 'labels' key in the API response
+        logger.info(f"Blogger API Response labels: {response.get('labels')}")
         return True
 
     except HttpError as e:
