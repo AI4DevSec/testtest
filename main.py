@@ -1144,8 +1144,8 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
     """Generate enhanced HTML template with better styling and comprehensive SEO elements."""
 
     # Escape special characters for HTML attributes (e.g., in meta tags, alt text)
-    escaped_title_html = title.replace('&', '&').replace('"', '"').replace("'", ''')
-    escaped_description_html = description.replace('&', '&').replace('"', '"').replace("'", ''')
+    escaped_title_html = title.replace('&', '&').replace('"', '"').replace("'", '')
+    escaped_description_html = description.replace('&', '&').replace('"', '"').replace("'", '')
 
     # Use json.dumps to get correctly escaped strings for JSON values.
     # We then slice [1:-1] to remove the outer quotes added by json.dumps,
@@ -1457,7 +1457,7 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
     # Safe fallback for description, ensuring it's not too long and doesn't contain quotes
     description_fallback = f"A comprehensive look at the latest news in {category} related to '{title}'."
     # CORRECTED LINE: Ensures single quotes are correctly escaped for HTML attributes
-    description = metadata.get('description', description_fallback).replace('&', '&').replace('"', '"').replace("'", ''')[:155] # Max 155 chars recommended and HTML escape quotes
+    description = metadata.get('description', description_fallback).replace('&', '&').replace('"', '"').replace("'", "")[:155] # Max 155 chars recommended and HTML escape quotes
 
     # Ensure keywords are comma-separated and clean
     keywords_from_meta = metadata.get('tags', '').replace(', ', ',').replace(' ', '_')
@@ -1614,7 +1614,7 @@ def main():
                 # Adjusted for proper escaping for placeholder description
                 generated_blog_markdown = (
                     f"title: {consolidated_topic}\n"
-                    f"description: {consolidated_description.replace('\"', '"').replace('\\n', ' ').strip()[:155].replace("'", ''')}\n"
+                    f"description: {consolidated_description.replace('"', '"').replace('\\n', ' ').strip()[:155].replace("'", "")}\n"
                     f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
                     f"categories: [{category}]\n"
                     f"tags: [{category}, news]\n"
