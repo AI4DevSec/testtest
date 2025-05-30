@@ -889,6 +889,44 @@ def generate_content_agent(consolidated_article_data, research_output, transform
     )
     blog_description_for_prompt = raw_description_for_prompt.replace('"', '').replace('\n', ' ').replace('\r', ' ').strip()[:155]
 
+    # Construct the prompt
+    prompt = (
+        f"You are a specialized Blog Writing Agent that transforms SEO research and aggregated article data "
+        f"into comprehensive, publication-ready, SEO-optimized blog posts. You excel at creating in-depth, "
+        f"authoritative content by synthesizing information from multiple sources, while maintaining reader engagement and SEO best practices.\n\n"
+        f"## Input Requirements:\n"
+        f"1.  `aggregated_source_data`: {json.dumps(consolidated_article_data_for_prompt, indent=2)}\n"
+        f"2.  `research_output`: {json.dumps(research_output, indent=2)}\n"
+        f"3.  `transformed_image_path_info`: '{image_path_for_prompt}' (This is the file path to the main featured image. Do NOT embed this image again within the content body. It will be handled separately in the HTML template.)\n\n"
+        f"## Content Specifications:\n"
+        f"-   **Word Count:** Aim for 2500-3000 words. Synthesize and expand thoughtfully on the `aggregated_source_data['combined_content']`, adding depth, specific (even if fabricated) details, and related information from your training data. Do NOT simply copy-paste content from the input. Rewrite and integrate.\n"
+        f"-   **Heading Structure:** Use the provided outline (`research_output['blog_outline']`). Ensure a minimum of 25 headings (`##` and `###` only, except for the main H1 title).\n"
+        f"-   **Paragraph Length:** Each paragraph should contain at least 5 sentences for comprehensive coverage, unless it's a short intro/outro or a bullet point explanation.\n"
+        f"-   **Writing Style:** Professional yet conversational, engaging, and human-like. Avoid jargon where simpler terms suffice. Do NOT mention that you are an AI or generated the content. Ensure a clear, authoritative, and trustworthy tone that positions the content as highly credible.\n"
+        f"-   **Target Audience:** Broad audience interested in the specified category.\n"
+        f"-   **Keyword Integration:** Naturally weave `primary_keywords` ({primary_keywords_str}) and `secondary_keywords` ({secondary_keywords_str}) throughout the text without keyword stuffing. Integrate them into headings, subheadings, and body paragraphs.\n"
+        f"-   **Content Expansion:** Elaborate significantly on the `aggregated_source_data['combined_content']` by adding specific details, explanations, and context, drawing from your extensive knowledge base. Emphasize synthesizing information from *all provided sources* to create a unique and comprehensive article.\n"
+        f"-   **Data & Examples:** Incorporate relevant data, statistics, and real-world examples (even if not in original article, create plausible ones). Invent realistic numbers, dates, names, and organizations where appropriate to enhance credibility. Ensure these details *support* the main points derived from the aggregated content. When inventing details or examples, ensure they are realistic and enhance the article's depth and plausibility.\n"
+        f"-   **Linking:** Generate relevant external links where appropriate (e.g., `[Source Name](https://www.reputable-source.com/article-about-topic)`). **Crucially, ensure these are actual, plausible URLs from reputable domains related to the topic (e.g., 'nytimes.com/tech-news', 'theverge.com/reviews', 'medicaljournals.org/research', 'forbes.com/business-insights', 'espn.com/sports-analysis'). Invent these URLs realistically and embed them naturally within the surrounding sentences. Do NOT use the `@` symbol or any other prefix before links or raw URLs. Do NOT include `example.com` or similar placeholder domains.** Also, generate **2-3 contextually relevant internal links** within the content, pointing to hypothetical related blog posts on your own blog (e.g., `[Benefits of Cloud Adoption](https://yourblog.blogspot.com/2024/05/cloud-adoption-benefits.html)`, `[Latest Trends in Renewable Energy](https://yourblog.blogspot.com/2024/05/renewable-energy-trends.html)`). These internal links should be naturally embedded within sentences and promote exploration of related content on your site.\n"
+        f"-   **Image Inclusion:** Do NOT include any markdown `![alt text](image_path)` syntax for the featured image within the generated content body. The featured image is handled separately. Crucially, do NOT generate any `![alt text](image_path)` markdown for additional images within the content body. The single `featuredImage` is handled separately by the HTML template and should not be re-included.\n"
+        f"## Output Structure:\n"
+        f"Generate the complete blog post in markdown format. It must start with a metadata block followed by the blog content.\n\n"
+        f"**Metadata Block (exact key-value pairs, no --- delimiters, newline separated):**\n"
+        f"title: {new_blog_title}\n"
+        f"description: {blog_description_for_prompt}\n"
+        f"date: {datetime.now().strftime('%Y-%m-%d')}\n"
+        f"categories: [{consolidated_article_data.get('category', 'general')}, {', '.join(research_output.get('primary_keywords', [])[:2])}]\n"
+        f"tags: [{', '.join(research_output.get('primary_keywords', []) + research_output.get('secondary_keywords', {}).get(list(research_output.get('secondary_keywords', {}).keys())[0], []) if research_output.get('secondary_keywords') else research_output.get('primary_keywords', []))}]\n"
+        f"featuredImage: {transformed_image_filepath if transformed_image_filepath else 'None'}\n\n"
+        f"**Blog Content (following the metadata block):**\n"
+        f"1.  **Main Title (H1):** Start with an H1 heading based on the provided `suggested_blog_title`. Example: `# {new_blog_title}`.\n"
+        f"2.  **Introduction (2-3 paragraphs):** Hook the reader. Clearly state the problem or topic and your blog's value proposition.\n"
+        f"3.  **Main Sections:** Follow the `blog_outline` from `research_output`. Expand each section (`##`) and sub-section (`###`). Ensure each section provides substantial information.\n"
+        f"4.  **FAQ Section:** Include 5-7 frequently asked questions with detailed, comprehensive answers, related to the topic and incorporating keywords.\n"
+        f"5.  **Conclusion:** Summarize key takeaways, provide a forward-looking statement, and a clear call-to-action.\n"
+        f"Do NOT include any introductory or concluding remarks outside the blog content itself (e.g., 'Here is your blog post'). **Do NOT include any bracketed instructions (like `[mention this]`), placeholders (like `example.com`), or any comments intended for me within the output markdown. The entire output must be polished, final content, ready for publication.**"
+    )
+
     try:
         logger.info(f"Generating full blog content for: '{new_blog_title[:70]}...'")
         response = _gemini_generate_content_with_retry(CONTENT_MODEL, prompt)
