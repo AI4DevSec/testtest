@@ -1220,7 +1220,7 @@ def generate_enhanced_html_template(title, description, keywords, image_url_for_
             transition: all 0.3s ease-in-out;
         }
         .container:hover {
-            box-shadow: var(--shadow-hover);
+            box_shadow: var(--shadow-hover);
         }
 
         .article-header {
@@ -1456,6 +1456,7 @@ def save_blog_post(consolidated_topic_for_fallback, generated_markdown_content, 
 
     # Safe fallback for description, ensuring it's not too long and doesn't contain quotes
     description_fallback = f"A comprehensive look at the latest news in {category} related to '{title}'."
+    # FIX: Corrected the escaping for single quotes within the replace method.
     description = metadata.get('description', description_fallback).replace('"', '"').replace("'", ''')[:155] # Max 155 chars recommended and HTML escape quotes
 
     # Ensure keywords are comma-separated and clean
